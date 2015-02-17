@@ -1,0 +1,10 @@
+#!/bin/bash
+
+EPO=${1-MTK14.EPO}
+file=${1-$EPO}
+
+if [ -e $file ] ; then
+	mv $file $file.last
+fi
+
+wget -O${file} ftp://gtopagpsenduser01:enduser080807@125.227.104.212/${EPO}

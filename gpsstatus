@@ -1,0 +1,32 @@
+#!/bin/bash
+
+${1:?You must specify a device}
+
+if [ ! -c $1 ] ; then
+	echo "ERROR: $1 is not a charqacter device."
+	exit 1
+fi
+
+clear
+
+declare -i fix_start=0
+declare -i ttff=0
+while read line ; do
+	if [[ ${line:1:5} == "GPGGA" ]] ; then
+		clear
+		if [[ ${line} =~ ,,,,, ]] ; then
+			ttff=$(( $SECONDS - $fix_start ))
+			echo "NO FIX  WAITING: $ttff"
+		else
+			fix_start=0
+			echo "FIX  TTFF: $ttff"
+		fi
+		gpssend PMTK607 $1
+	fi
+	if [[ ${line:1:7} == "PMTK011" ]] ; then
+		fix_start=$SECONDS
+	fi
+	echo $line
+done < $1
+
+

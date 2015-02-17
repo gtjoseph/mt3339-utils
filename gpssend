@@ -1,0 +1,20 @@
+#!/bin/bash
+
+string=${1:?You must supply a string and a device}
+
+device=${2:?You must supply a device}
+if [ ! -c $device ] ; then
+	echo "Device $device doesn't exist or isn't a character device."
+	exit 1;
+fi
+
+declare -i crc=0
+declare -i len=$(( ${#string} - 1 ))
+
+for i in `seq 0 ${len}` ; do
+	declare -i c=`printf "%d" "'${string:$i:1}"`
+	crc=$(( crc  ^ $c ))
+done
+
+stdbuf -o0 printf "\$%s*%02x\r\n" ${1} ${crc} > $device
+

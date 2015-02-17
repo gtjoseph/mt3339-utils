@@ -1,0 +1,96 @@
+#!/bin/bash
+dirname=`dirname $0`/
+
+# ACTION is passed when the script is called from udev.
+# If it's 'remove' we do nothing.
+if [ "$ACTION"z == "remove"z ] ; then
+	exit 0
+fi
+
+setrate() {
+	for rate in $test_rates ; do
+		stty -F $device raw -echo $rate
+		# Send the command 3 times with different sleeps, just in case.
+		$dirname/gpssend PMTK251,$target_rate $device ; usleep 51327
+		$dirname/gpssend PMTK251,$target_rate $device ; usleep 33665
+		$dirname/gpssend PMTK251,$target_rate $device ; usleep 12884
+	done
+
+	stty -F $device raw -echo $target_rate
+}
+
+target_rate=115200
+init_command="PMTK314,1,1,1,1,5,5,0,0,0,0,0,0,0,0,0,0,0,1,0"
+
+print_help() {
+	echo "Usage: $0 [ -i <init_command> [ -s <target_rate> ] ] | [ -f <command_file> ] <device> "
+	echo "       target_rate defaults to 115200"
+	echo "       init_command defaults to PMTK314,1,1,1,1,5,5,0,0,0,0,0,0,0,0,0,0,0,1,0"
+}
+
+while getopts "s:i:f:" opt; do
+	case $opt in 
+		s )
+			target_rate=$OPTARG
+			;;
+		i )
+			init_command=$OPTARG
+			;;
+		f )
+			command_file=$OPTARG
+			if [ ! -f $command_file ] ; then
+				echo "ERROR: File not found: $command_file"
+				print_help
+				exit 1
+			fi
+			;;
+		\? )
+		echo Invalid option specified.
+		echo Usage: $(basename $0) [-c config_file]
+		exit 1
+		;;
+	esac
+done
+shift $(($OPTIND - 1))
+
+device=${1:?You must supply a device}
+if [ ! -c $device ] ; then
+	echo "Device $device doesn't exist or isn't a character device."
+	print_help
+	exit ;
+fi
+
+test_rates=" 4800 9600 19200 38400 57600 115200 "
+if [[ ${test_rates/* $target_rate */FOUND} != "FOUND" ]] ; then
+	echo "$target_rate is not a valid target rate."
+	prnt_help
+	exit 1;
+fi
+
+if [ -n "$command_file" ] ; then
+	cat "$command_file" | while read line ; do
+		if [ z"${line:0:4}" == z'PMTK' ] ; then
+			$dirname/gpssend $line $device
+		fi
+		if [ z"${line:0:5}" == z'sleep' ] ; then
+			eval $line
+		fi
+		if [ z"${line:0:7}" == z'setrate' ] ; then
+			eval $line
+		fi
+		if [ z"${line:0:9}" == z'epoloader' ] ; then
+			eval $dirname$line
+		fi
+		if [ z"${line:0:11}" == z'eporetrieve' ] ; then
+			eval $dirname$line
+		fi
+		if [ z"${line:0:9}" == z'gpsstatus' ] ; then
+			eval $dirname$line
+		fi
+	done
+elif [ -n $init_command ] ; then
+	setrate $target_rate
+	$dirname/gpssend $init_command $device
+	$dirname/gpssend PMTK220,1000 $device
+fi
+
