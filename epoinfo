@@ -1,11 +1,10 @@
 #!/usr/bin/python
 
 import sys
-import os
 import io
-import array
 import struct
 import time
+import argparse
 
 PREAMBLE = 0x2404
 COMMAND = 0x02d2
@@ -18,72 +17,72 @@ SECONDS_PER_WEEK = 604800
 HOURS_PER_WEEK = 168
 
 def Convert2UTC(GPSHour):
-	GPSHour *= SECONDS_PER_HOUR
-	GPSHour += GPS_OFFSET_SECONDS
-	tm = time.gmtime(GPSHour)
-	return time.strftime("%Y-%m-%d %H:%M:%S", tm)
+    GPSHour *= SECONDS_PER_HOUR
+    GPSHour += GPS_OFFSET_SECONDS
+    tm = time.gmtime(GPSHour)
+    return time.strftime("%Y-%m-%d %H:%M:%S", tm)
 
 def Convert2Local(GPSHour):
-	GPSHour *= SECONDS_PER_HOUR
-	GPSHour += GPS_OFFSET_SECONDS
-	tm = time.localtime(GPSHour)
-	return time.strftime("%Y-%m-%d %H:%M:%S", tm)
+    GPSHour *= SECONDS_PER_HOUR
+    GPSHour += GPS_OFFSET_SECONDS
+    tm = time.localtime(GPSHour)
+    return time.strftime("%Y-%m-%d %H:%M:%S", tm)
 
 def crc8(d):
-	crc = 0
-	for b in bytearray(d):
-		crc ^= (b & 0xff)
-	return crc
+    crc = 0
+    for b in bytearray(d):
+        crc ^= (b & 0xff)
+    return crc
+
+def convert_arg_line_to_args(arg_line):
+    for arg in arg_line.split():
+        if not arg.strip():
+            continue
+        yield arg
 
 def main():
-	args = sys.argv
-		
-	if len(args) < 2:
-		print "You must supply a file name."
-		print "Usage: %s <epo_file_name>" % args[0]
-		return 1
-		
-	fi = io.open(args[1], mode="rb", buffering=0)
-	header = fi.read(75)
-	if header[0:3] == header[60:63]:
-		print "Opening EPO Type I file"
-		EPO_SET_SIZE = 1920
-		SAT_SET_SIZE = 60
-	elif header[0:3] == header[72:75]:
-		print "Opening EPO Type II file"
-		EPO_SET_SIZE = 2304;
-		SAT_SET_SIZE = 72;
-	else:
-		print "Unknown file type."
-		return 1
-		
-	fi.close()
-	fi = io.open(args[1], mode="rb", buffering=0)
-	sets = 0
-	
-	while True:
-		epo_set = fi.read(EPO_SET_SIZE)
-		if len(epo_set) == 0:
-			break
-		sets += 1
-		epo_start = struct.unpack("<i", epo_set[0:3]+'\0')[0]
-		if sets == 1:
-			start = epo_start
-		print "Set: %4d.  GPS Wk: %4d  Hr: %3d  Sec:  %6d  %s to %s UTC" % (sets, (epo_start / HOURS_PER_WEEK), (epo_start % HOURS_PER_WEEK), (epo_start % HOURS_PER_WEEK) * SECONDS_PER_HOUR,
-		Convert2UTC(epo_start), 
-		Convert2UTC(epo_start + 6))
-		
-	fi.close()
-	
-	print "%4d EPO sets.  Valid from %s to %s UTC\n" % (sets, Convert2UTC(start), 
-		Convert2UTC(epo_start + 6));
-	return 0
-		
+    parser = argparse.ArgumentParser(fromfile_prefix_chars='@',
+    description="Prints EPO file information",
+    epilog="You can use '@filename' to read arguments from a file.")
+    parser.convert_arg_line_to_args = convert_arg_line_to_args
+    parser.add_argument("input_file", metavar="<EPO_File>", help="EPO data file")
+    args = parser.parse_args()
+
+    fi = io.open(args.input_file, mode="rb")
+    header = fi.read(75)
+    if header[0:3] == header[60:63]:
+        print "Opening EPO Type I file"
+        EPO_SET_SIZE = 1920
+    elif header[0:3] == header[72:75]:
+        print "Opening EPO Type II file"
+        EPO_SET_SIZE = 2304;
+    else:
+        print "Unknown file type."
+        return 1
+        
+    fi.close()
+    fi = io.open(args.input_file, mode="rb")
+    sets = 0
+    
+    while True:
+        epo_set = fi.read(EPO_SET_SIZE)
+        if len(epo_set) == 0:
+            break
+        sets += 1
+        epo_start = struct.unpack("<i", epo_set[0:3]+'\0')[0]
+        if sets == 1:
+            start = epo_start
+            
+        print "Set: %4d.  GPS Wk: %4d  Hr: %3d  Sec:  %6d  %s to %s UTC" % (
+            sets, (epo_start / HOURS_PER_WEEK), (epo_start % HOURS_PER_WEEK),
+            (epo_start % HOURS_PER_WEEK) * SECONDS_PER_HOUR,
+            Convert2UTC(epo_start), Convert2UTC(epo_start + 6))
+        
+    fi.close()
+
+    print "%4d EPO sets.  Valid from %s to %s UTC\n" % (sets,
+    Convert2UTC(start),    Convert2UTC(epo_start + 6))
+    return 0
+
 if __name__ == "__main__":
     sys.exit(main() or 0)
-
-
-
-
-
-
