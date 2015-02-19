@@ -191,7 +191,7 @@ the unit and the port will be returned to their previous speed.
 
 Oh yes...  Look at the times for internal antenna/inside.  The difference is amazing.
 
-	UnitLocation:	Always inside. Too cold to be outside.
+	Location:		Always inside. Too cold to be outside.
 	Antenna:  		Internal or External Active
 	AntLocation:
 		ClearSky:	Outside, clear sky
@@ -205,7 +205,7 @@ Oh yes...  Look at the times for internal antenna/inside.  The difference is ama
 	TTFF:			Time to First Fix in seconds (3 tests)
 	 
 
-| UnitLocation | Antenna  | AntLocation | EPO | StartFrom  | TTFF1 | TTFF2 | TTFF3 |
+| Location | Antenna  | AntLocation | EPO | StartFrom  | TTFF1 | TTFF2 | TTFF3 |
 |--------------|----------|-------------|-----|------------|------:|------:|------:|
 | Inside       | External | Clear Sky   | N   :heavy_exclamation_mark:| Factory    | 68    | 72    | 150   |
 | Inside       | External | Clear Sky   | N   | Reset      | 8     | 10    | 12    |
@@ -274,12 +274,13 @@ sets NMEA sentences and frequency and finally does an epo load.
 #  setspeed <newspeed>			Set new port and unit speed to <newspeed>
 #  epoloader <epoloader_args>   Run epoloader
 #  factory_reset				Clear system/user configurations then cold start
-#                               The unit and port speed will be reset to 9600
+#                               	The unit and port speed will be reset to 9600
 
 #  The following commands can be prefixed with '-' to not wait for an ACK.
 #  hot_start					Restart using all available data
 #  warm_start					Don't use Ephemeris at restart
-#  cold_start					Don't use Time, Position, Almanacs and Ephemeris data at re‐start
+#  cold_start					Don't use Time, Position, Almanacs and Ephemeris
+#									data at re‐start
 #  PMTKnnn,<args>               Send the specified PMTK command
 #
 
