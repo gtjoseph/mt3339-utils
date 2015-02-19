@@ -189,7 +189,7 @@ the unit and the port will be returned to their previous speed.
 
 ### Does it make a difference??
 
-Oh yes...  Look at the times for internal antenna/inside.  The difference is amazing.
+Oh yes...  Look at the times for Factory Reset.  The difference is amazing.
 
 	Location:		Always inside. Too cold to be outside.
 	Antenna:  		Internal or External Active
@@ -207,29 +207,31 @@ Oh yes...  Look at the times for internal antenna/inside.  The difference is ama
 
 | Location | Antenna  | AntLocation | EPO | StartFrom  | TTFF1 | TTFF2 | TTFF3 |
 |--------------|----------|-------------|-----|------------|------:|------:|------:|
-| Inside       | External | Clear Sky   | N   :heavy_exclamation_mark:| Factory    | 68    | 72    | 150   |
-| Inside       | External | Clear Sky   | N   | Reset      | 8     | 10    | 12    |
-| Inside       | External | Clear Sky   | N   | PowerCycle | 13    | 15    | 9     |
+| Inside       | External | Clear Sky   | N  :heavy_exclamation_mark: | Factory    | 68    | 72    | 150   |
 | Inside       | External | Clear Sky   | Y  :white_check_mark: | Factory    | 2     | 2     | 2     |
-| Inside       | External | Clear Sky   | Y   | Reset      | 7     | 7     | 7     |
-| Inside       | External | Clear Sky   | Y   | PowerCycle | 1     | 8     | 2     |
-| Inside       | External | Inside      | N  :heavy_exclamation_mark: | Factory    | 590   | 367   | 283   |
-| Inside       | External | Inside      | N   | Reset      | 6     | 4     | 5     |
-| Inside       | External | Inside      | N   | PowerCycle | 8     | 6     | 15    |
+| Inside       | External | Inside      | N  :bangbang: | Factory    | 590   | 367   | 283   |
 | Inside       | External | Inside      | Y  :white_check_mark: | Factory    | 10    | 6     | 14    |
-| Inside       | External | Inside      | Y   | Reset      | 5     | 5     | 5     |
-| Inside       | External | Inside      | Y   | PowerCycle | 13    | 10    | 7     |
-| Inside       | External | Deep Inside | N  :heavy_exclamation_mark: | Factory    | 420   | 335    | 504   |
-| Inside       | External | Deep Inside | N   | Reset      | 3     | 6     | 6     |
-| Inside       | External | Deep Inside | N   | PowerCycle | 2     | 6     | 2     |
+| Inside       | External | Deep Inside | N  :bangbang: | Factory    | 420   | 335    | 504   |
 | Inside       | External | Deep Inside | Y  :white_check_mark: | Factory    | 14    | 20    | 17    |
-| Inside       | External | Deep Inside | Y   | Reset      | 7     | 8     | 5     |
-| Inside       | External | Deep Inside | Y   | PowerCycle | 5     | 19    | 10    |
-| Inside       | Internal | Inside      | N  :x: | Factory    | 2422  | 3600* | Gave Up |
-| Inside       | Internal | Inside      | N   | Reset      | 6     | 4     | 11    |
-| Inside       | Internal | Inside      | N   | PowerCycle | 10    | 9     | 9     |
+| Inside       | Internal | Inside      | N  :x:                      | Factory    | 2422  | 3600* | Gave Up |
 | Inside       | Internal | Inside      | Y  :white_check_mark: | Factory    | 14    | 33    | 15    |
+|||||||||
+| Inside       | External | Clear Sky   | N   | Reset      | 8     | 10    | 12    |
+| Inside       | External | Clear Sky   | Y   | Reset      | 7     | 7     | 7     |
+| Inside       | External | Inside      | N   | Reset      | 6     | 4     | 5     |
+| Inside       | External | Inside      | Y   | Reset      | 5     | 5     | 5     |
+| Inside       | External | Deep Inside | N   | Reset      | 3     | 6     | 6     |
+| Inside       | External | Deep Inside | Y   | Reset      | 7     | 8     | 5     |
+| Inside       | Internal | Inside      | N   | Reset      | 6     | 4     | 11    |
 | Inside       | Internal | Inside      | Y   | Reset      | 7     | 4     | 4     |
+|||||||||
+| Inside       | External | Clear Sky   | N   | PowerCycle | 13    | 15    | 9     |
+| Inside       | External | Clear Sky   | Y   | PowerCycle | 1     | 8     | 2     |
+| Inside       | External | Inside      | N   | PowerCycle | 8     | 6     | 15    |
+| Inside       | External | Inside      | Y   | PowerCycle | 13    | 10    | 7     |
+| Inside       | External | Deep Inside | N   | PowerCycle | 2     | 6     | 2     |
+| Inside       | External | Deep Inside | Y   | PowerCycle | 5     | 19    | 10    |
+| Inside       | Internal | Inside      | N   | PowerCycle | 10    | 9     | 9     |
 | Inside       | Internal | Inside      | Y   | PowerCycle | 20    | 25    | 16    |
 
 
