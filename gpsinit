@@ -1,96 +1,252 @@
-#!/bin/bash
-dirname=`dirname $0`/
+#!/usr/bin/python
 
-# ACTION is passed when the script is called from udev.
-# If it's 'remove' we do nothing.
-if [ "$ACTION"z == "remove"z ] ; then
-	exit 0
-fi
+import sys
+import io
+import struct
+import time
+import argparse
+import serial
+import subprocess
+from os.path import dirname
 
-setrate() {
-	for rate in $test_rates ; do
-		stty -F $device raw -echo $rate
-		# Send the command 3 times with different sleeps, just in case.
-		$dirname/gpssend PMTK251,$target_rate $device ; usleep 51327
-		$dirname/gpssend PMTK251,$target_rate $device ; usleep 33665
-		$dirname/gpssend PMTK251,$target_rate $device ; usleep 12884
-	done
+PREAMBLE = 0x2404
+EPO_CMD = 0x02d2
+EOW = 0x0a0d
+UART_CMD = 253
+DEFAULT_COMMAND="PMTK314,1,1,1,1,5,5,0,0,0,0,0,0,0,0,0,0,0,1,0"
 
-	stty -F $device raw -echo $target_rate
+baudrate = {
+    "8bc": 4800,
+    "8bd": 9600,
+    "8be": 19200,
+    "8bf": 38400,
+    "18b1": 57600,
+    "18b2": 115200,
 }
 
-target_rate=115200
-init_command="PMTK314,1,1,1,1,5,5,0,0,0,0,0,0,0,0,0,0,0,1,0"
+def crc8(d):
+    crc = 0
+    for b in bytearray(d):
+        crc ^= (b & 0xff)
+    return crc
 
-print_help() {
-	echo "Usage: $0 [ -i <init_command> [ -s <target_rate> ] ] | [ -f <command_file> ] <device> "
-	echo "       target_rate defaults to 115200"
-	echo "       init_command defaults to PMTK314,1,1,1,1,5,5,0,0,0,0,0,0,0,0,0,0,0,1,0"
-}
+def getResponse(fg, command):
+    limit = 0
+    while True:
+        b = fg.read(1)
+        if len(b) == 0:
+            break
 
-while getopts "s:i:f:" opt; do
-	case $opt in 
-		s )
-			target_rate=$OPTARG
-			;;
-		i )
-			init_command=$OPTARG
-			;;
-		f )
-			command_file=$OPTARG
-			if [ ! -f $command_file ] ; then
-				echo "ERROR: File not found: $command_file"
-				print_help
-				exit 1
-			fi
-			;;
-		\? )
-		echo Invalid option specified.
-		echo Usage: $(basename $0) [-c config_file]
-		exit 1
-		;;
-	esac
-done
-shift $(($OPTIND - 1))
+        if b != '\x04':
+            continue
+            
+        b = fg.read(1)
+        if b != '\x24':
+            continue
+            
+        length, cmd = struct.unpack("<HH", fg.read(4))
+        
+        if cmd == command:
+            return struct.unpack("<HBBH", fg.read(6))[0:2]
+        else:
+            struct.unpack("<%dBBH" % (length - 9), fg.read(length-6))
+            
+        limit += 1
+        if limit > 10:
+            break
+            
+    return (-1, -1, -1, -1)
 
-device=${1:?You must supply a device}
-if [ ! -c $device ] ; then
-	echo "Device $device doesn't exist or isn't a character device."
-	print_help
-	exit ;
-fi
+def getNMEAResponse(fg, command):
+    limit = 0
+    while True:
+        line = fg.readline().strip()
+        if len(line) < 3:
+            continue
+        spl = line[1:-3].split(',')
+        if spl[0] == command:
+            return spl
 
-test_rates=" 4800 9600 19200 38400 57600 115200 "
-if [[ ${test_rates/* $target_rate */FOUND} != "FOUND" ]] ; then
-	echo "$target_rate is not a valid target rate."
-	prnt_help
-	exit 1;
-fi
+        limit += 1
+        if limit > 20:
+            break
+            
+    return ("PMTK999", "999", "999")
 
-if [ -n "$command_file" ] ; then
-	cat "$command_file" | while read line ; do
-		if [ z"${line:0:4}" == z'PMTK' ] ; then
-			$dirname/gpssend $line $device
-		fi
-		if [ z"${line:0:5}" == z'sleep' ] ; then
-			eval $line
-		fi
-		if [ z"${line:0:7}" == z'setrate' ] ; then
-			eval $line
-		fi
-		if [ z"${line:0:9}" == z'epoloader' ] ; then
-			eval $dirname$line
-		fi
-		if [ z"${line:0:11}" == z'eporetrieve' ] ; then
-			eval $dirname$line
-		fi
-		if [ z"${line:0:9}" == z'gpsstatus' ] ; then
-			eval $dirname$line
-		fi
-	done
-elif [ -n $init_command ] ; then
-	setrate $target_rate
-	$dirname/gpssend $init_command $device
-	$dirname/gpssend PMTK220,1000 $device
-fi
+def send_string(fg, string):
+    fg.flushInput()
+    fg.write("$%s*%02x\r\n" % (string, crc8(string)))
+    fg.flushOutput()
+
+def send_speed(fg, speed, count, delay):
+    speed_string = "PMTK251,%d" % speed
+    send_string = "$%s*%02x\r\n" % (speed_string, crc8(speed_string))
+    i = iter(range(count,-1,-1))
+    while next(i):
+        fg.write(send_string)
+        fg.flush()
+        time.sleep(delay)
+
+def convert_arg_line_to_args(arg_line):
+    for arg in arg_line.split():
+        if not arg.strip():
+            continue
+        yield arg
+
+def set_nmea(fg, rate):
+    buf = bytearray('\0' * 14)
+    struct.pack_into("<HHHBIBH", buf, 0, PREAMBLE, 14, UART_CMD, 0, rate, 0, EOW)
+    struct.pack_into("B", buf, 11, crc8(buf[2:11]))
+    fg.write(buf)
+    fg.flush()
+
+def set_speed(fg, speed):
+    send_speed(fg, speed, 3, 0.113)
+    time.sleep(0.245)
+    fg.baudrate = speed
+
+def process_command(fg, line):
+    line = str(line)
+    if line[0] == '-':
+        send_string(fg, line[1:])
+        time.sleep(0.250)
+    else:
+        send_string(fg, line)
+        resp = getNMEAResponse(fg, "PMTK001")
+        if resp[2] != '3':
+            print >> sys.stderr, "Failed to get ACK."
+
+def process_line(fg, device, speed, line):
+    if line[0:len("setspeed ")] == "setspeed ":
+        newspeed = int(line[len("setspeed "):].strip())
+        print "Setting new speed: %d" % newspeed
+        set_speed(fg, newspeed)
+    elif line[0:len("sleep ")] == "sleep ":
+        sleeptime = float(line[len("sleep "):].strip())
+        print "Sleeping for %f seconds" % sleeptime
+        time.sleep(sleeptime)
+    elif line.count("hot_start") >= 1:
+        process_command(fg, line.replace("hot_start", "PMTK101"))
+    elif line.count("warm_start") >= 1:
+        process_command(fg, line.replace("warm_start", "PMTK102"))
+    elif line.count("cold_start") >= 1:
+        process_command(fg, line.replace("cold_start", "PMTK103"))
+    elif line == "factory_reset":
+        process_command(fg, "-PMTK104")
+        time.sleep(0.500)
+        set_speed(fg, 9600)
+    elif line[0:len("epoloader ")] == "epoloader ":
+        fg.close()
+        a0 = sys.argv[0]
+        d = dirname(a0) + '/'
+        p = subprocess.Popen(d + line,
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, close_fds=True, shell=True)
+        while True:
+            pline = p.stdout.readline()
+            if not pline:
+                break
+            print ">> " + pline.strip()
+        fg = serial.Serial(port=device, timeout=5, baudrate=speed)
+    else:
+        process_command(fg, line)
+    return fg
+
+
+
+def main():
+    parser = argparse.ArgumentParser(fromfile_prefix_chars='@',
+    description="Initialized GPS to known state",
+    epilog="You can use '@filename' to read arguments from a file.")
+    group = parser.add_mutually_exclusive_group()
+    parser.convert_arg_line_to_args = convert_arg_line_to_args
+    parser.add_argument("-s", "--speed", type=int, default=115200, dest="speed", help="Interface speed", choices=[4800,9600,19200,38400,57600,115200])
+    group.add_argument("-i", "--init_command", metavar="<init_command>", dest="init_command", help="A single initialization command such as 'PMTK101'")
+    group.add_argument("-f", "--command_file", metavar="<command_file>", dest="command_file", help="A file containing commands used to initialize the GPS")
+    
+    parser.add_argument("output_device", metavar="<gps_device>", help="GPS serial device such as '/dev/ttyUSB0'")
+
+    args = parser.parse_args()
+
+    p = subprocess.Popen("lsof -FpcL %s 2>/dev/null" % args.output_device,
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, close_fds=True, shell=True)
+    o = p.communicate()[0]
+    if len(o) > 0:
+        lines = o.split('\n')
+        print >> sys.stderr, "ERROR: Device %s is open by PID: %s  PROG: %s  USER: %s" % (args.output_device, lines[0][1:], lines[1][1:], lines[2][1:])
+        return 1;
+    
+    stty = subprocess.check_output("stty -g -F %s" % args.output_device, shell=True).split(":")
+    previous_baudrate = baudrate[stty[2]]
+    print "Current port speed: %d" % previous_baudrate
+    subprocess.call("stty -F %s raw" % args.output_device, shell=True)
+
+#    Make sure the unit is in NMEA mode
+    print "Making sure the unit is in NMEA mode"
+    for xrate in baudrate:
+        rate = baudrate[xrate]
+        fg = serial.Serial(port=args.output_device, timeout=5, baudrate=rate)
+        fg.flushInput()
+        set_nmea(fg, rate)
+        fg.flushInput()
+        set_nmea(fg, rate)
+        fg.flushInput()
+        set_nmea(fg, rate)
+        fg.close()
+
+    tries = 0
+    while True:
+#    Get the speeds to match
+        print "Making sure the speeds match"
+        for xrate in baudrate:
+            rate = baudrate[xrate]
+            fg = serial.Serial(port=args.output_device, timeout=5, baudrate=rate)
+            fg.flushInput()
+            send_speed(fg, args.speed, 3, 0.123)
+            fg.close()
+
+        fg = serial.Serial(port=args.output_device, timeout=5, baudrate=args.speed)
+        fg.flushInput()
+        send_string(fg, "PMTK000")
+        resp = getNMEAResponse(fg, "PMTK001")
+        if resp[2] != '3':
+            print >> sys.stderr, "The GPS speed and the port speed couldn't be synchronized."
+            tries += 1
+            if tries < 2:
+                print "Retrying"
+            else:
+                fg.close()
+                subprocess.call("stty -F %s raw" % args.output_device, shell=True)
+                return 1
+        else:
+            print "GPS and port are now synchronized at %d" % args.speed
+            break
+
+    if args.command_file:
+        fi = io.open(args.command_file, mode="r")
+        print "Processing commands..."
+        while True:
+            line = fi.readline()
+            if not line or len(line) <= 0:
+                break;
+            line = line.strip()
+            if len(line) == 0:
+                continue
+            if line[0] == "#":
+                continue
+            line = line.replace("${DEVICE}", args.output_device).replace("${SPEED}", str(args.speed))
+            print line
+            fg = process_line(fg, args.output_device, args.speed, line)
+            
+        fi.close()
+        print "Done"
+    elif args.init_command:
+        fg = process_line(fg, args.output_device, args.speed, args.init_command)
+    else:
+        fg = process_line(fg, args.output_device, args.speed, DEFAULT_COMMAND)
+    
+    fg.close()
+    subprocess.call("stty -F %s raw" % args.output_device, shell=True)
+        
+if __name__ == "__main__":
+    sys.exit(main() or 0)
 
