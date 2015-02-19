@@ -1,22 +1,22 @@
-## Tools for MT3339 Based GPS
+## Tools for MT3339/PA6H Based GPS
 
 It may seem slightly counter-intuitive, but in order for a GPS unit to produce an accurate fix,
 it has to know the time, the location of the GPS satellites, and it's own rough location.
 Odd, given that it's job is to tell YOU those things.  Since the satellites broadcast the time and
-their positions, the GPS unit can get the info but **it must have a strong signal from 4 satellites 
+their positions, the GPS unit can get the info but **it must have a strong signal (>25dBHz) from 4 satellites 
 for about a minute.**  If the signal level drops a little or a satellite goes out of view in that minute,
 the GPS unit has to start over again.  Outdoors with a clear view of the sky, this isn't usually
 a problem.  Indoors or when the outdoor view is obstructed by trees, terrain, buildings, etc.
-it can be impossible to get an initial fix because you just can't get a strong signal from 4 satellites 
-for enough time.
+it can be impossible to get an initial fix because you just can't get a strong signal from the same
+4 satellites for enough time.
 
-"But wait, my cell phone gets a fast fix indoors!".  Yep, and there's a reason for that.  
+"But wait, my cell phone gets a fast fix indoors!".  Yep, and there's a reason for that.
 Being network connected, the phone already knows the exact time and it's rough location as
 the cell network provides both.  As for the location of the satellites at any particular time
 (the ephemeris data), that's public information and the GPS manufacturers thoughtfully
 provide files, usually updated nightly and good for 7, 14 or 30  days, that the phone can download.
 The whole process is called Assisted-GPS and doesn't require as strong
-a signal to get and maintain a fix.
+a signal (~15dBHz) to get and maintain a fix.
 
 If you going to use your MT3339 based unit only outdoors, no need to read further.  Otherwise...
 
@@ -191,48 +191,46 @@ the unit and the port will be returned to their previous speed.
 
 Oh yes...  Look at the times for Factory Reset.  The difference is amazing.
 
-	Location:		Always inside. Too cold to be outside.
+	StartFrom:
+		Factory:	Factory reset
+		Reset:		After first fix, hot start or hold enable pin low for 1 sec
+		PowerCycle: After first fix, remove VCC for 5 seconds (with backup battery connected)
 	Antenna:  		Internal or External Active
 	AntLocation:
 		ClearSky:	Outside, clear sky
 		Inside:		First floor room with window
 		DeepInside:	First floor interior room, no window
 	EPO: 			Y - loaded, N - not loaded
-	StartFrom:
-		Factory:	Factory reset
-		Reset:		Hot start or hold enable pin low for 1 sec
-		PowerCycle: Remove VCC for 5 seconds (with backup battery connected)
 	TTFF:			Time to First Fix in seconds (3 tests)
 	 
 
-| Location | Antenna  | AntLocation | EPO | StartFrom  | TTFF1 | TTFF2 | TTFF3 |
-|--------------|----------|-------------|-----|------------|------:|------:|------:|
-| Inside       | External | Clear Sky   | N  :heavy_exclamation_mark: | Factory    | 68    | 72    | 150   |
-| Inside       | External | Clear Sky   | Y  :white_check_mark: | Factory    | 2     | 2     | 2     |
-| Inside       | External | Inside      | N  :bangbang: | Factory    | 590   | 367   | 283   |
-| Inside       | External | Inside      | Y  :white_check_mark: | Factory    | 10    | 6     | 14    |
-| Inside       | External | Deep Inside | N  :bangbang: | Factory    | 420   | 335    | 504   |
-| Inside       | External | Deep Inside | Y  :white_check_mark: | Factory    | 14    | 20    | 17    |
-| Inside       | Internal | Inside      | N  :x:                      | Factory    | 2422  | 3600* | Gave Up |
-| Inside       | Internal | Inside      | Y  :white_check_mark: | Factory    | 14    | 33    | 15    |
-|||||||||
-| Inside       | External | Clear Sky   | N   | Reset      | 8     | 10    | 12    |
-| Inside       | External | Clear Sky   | Y   | Reset      | 7     | 7     | 7     |
-| Inside       | External | Inside      | N   | Reset      | 6     | 4     | 5     |
-| Inside       | External | Inside      | Y   | Reset      | 5     | 5     | 5     |
-| Inside       | External | Deep Inside | N   | Reset      | 3     | 6     | 6     |
-| Inside       | External | Deep Inside | Y   | Reset      | 7     | 8     | 5     |
-| Inside       | Internal | Inside      | N   | Reset      | 6     | 4     | 11    |
-| Inside       | Internal | Inside      | Y   | Reset      | 7     | 4     | 4     |
-|||||||||
-| Inside       | External | Clear Sky   | N   | PowerCycle | 13    | 15    | 9     |
-| Inside       | External | Clear Sky   | Y   | PowerCycle | 1     | 8     | 2     |
-| Inside       | External | Inside      | N   | PowerCycle | 8     | 6     | 15    |
-| Inside       | External | Inside      | Y   | PowerCycle | 13    | 10    | 7     |
-| Inside       | External | Deep Inside | N   | PowerCycle | 2     | 6     | 2     |
-| Inside       | External | Deep Inside | Y   | PowerCycle | 5     | 19    | 10    |
-| Inside       | Internal | Inside      | N   | PowerCycle | 10    | 9     | 9     |
-| Inside       | Internal | Inside      | Y   | PowerCycle | 20    | 25    | 16    |
+| StartFrom  | Antenna  | AntLocation | EPO |                          | TTFF1 | TTFF2 | TTFF3 |
+|------------|----------|-------------|-----|--------------------------|------:|------:|------:|
+| Factory    | External | Clear Sky   | N   | :heavy_exclamation_mark: | 68    | 72    | 150   |
+| Factory    | External | Clear Sky   | Y   | :white_check_mark:       | 2     | 2     | 2     |
+| Factory    | External | Deep Inside | N   | :bangbang:               | 420   | 335   | 504   |
+| Factory    | External | Deep Inside | Y   | :white_check_mark:       | 14    | 20    | 17    |
+| Factory    | External | Inside      | N   | :bangbang:               | 590   | 367   | 283   |
+| Factory    | External | Inside      | Y   | :white_check_mark:       | 10    | 6     | 14    |
+| Factory    | Internal | Inside      | N   | :x:                      | 2422  | 3600* | 7200* |
+| Factory    | Internal | Inside      | Y   | :white_check_mark:       | 14    | 33    | 15    |
+| PowerCycle | External | Clear Sky   | N   |                          | 13    | 15    | 9     |
+| PowerCycle | External | Clear Sky   | Y   |                          | 1     | 8     | 2     |
+| PowerCycle | External | Deep Inside | N   |                          | 2     | 6     | 2     |
+| PowerCycle | External | Deep Inside | Y   |                          | 5     | 19    | 10    |
+| PowerCycle | External | Inside      | N   |                          | 8     | 6     | 15    |
+| PowerCycle | External | Inside      | Y   |                          | 13    | 10    | 7     |
+| PowerCycle | Internal | Inside      | N   |                          | 10    | 9     | 9     |
+| PowerCycle | Internal | Inside      | Y   |                          | 20    | 25    | 16    |
+| Reset      | External | Clear Sky   | N   |                          | 8     | 10    | 12    |
+| Reset      | External | Clear Sky   | Y   |                          | 7     | 7     | 7     |
+| Reset      | External | Deep Inside | N   |                          | 3     | 6     | 6     |
+| Reset      | External | Deep Inside | Y   |                          | 7     | 8     | 5     |
+| Reset      | External | Inside      | N   |                          | 6     | 4     | 5     |
+| Reset      | External | Inside      | Y   |                          | 5     | 5     | 5     |
+| Reset      | Internal | Inside      | N   |                          | 6     | 4     | 11    |
+| Reset      | Internal | Inside      | Y   |                          | 7     | 4     | 4     |
+|            |          |             |     |                          |       | *     | Gave Up|
 
 
 ### gpsinit:  Initializes GPS configuration
@@ -263,7 +261,7 @@ enable/disable NMEA sentences, etc.  You can specify the desired speed and a sin
 command line with the '-i' and '-s' options or the speed and a list of commands in a file specified
 by the '-f' option.  
 
-This is an example gpsinit_reset.conf that clears the NVRAM, does a factory reset, sets some defaults,
+This is an example gpsinit_reset.conf that clears the EPO data, does a factory reset, sets some defaults,
 sets NMEA sentences and frequency and finally does an epo load.
 ```
 # You can use the following variables in this file...
@@ -288,7 +286,7 @@ sets NMEA sentences and frequency and finally does an epo load.
 
 # Clear the EPO NVRAM
 PMTK127
-# Factory reset (don't wait for ACK)
+# Factory reset
 factory_reset
 # Now set to 115200
 setspeed 115200
