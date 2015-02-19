@@ -107,13 +107,74 @@ def convert_arg_line_to_args(arg_line):
             continue
         yield arg
 
+def set_nmea(fg, rate):
+    buf = bytearray('\0' * 14)
+    struct.pack_into("<HHHBIBH", buf, 0, PREAMBLE, 14, UART_CMD, 0, rate, 0, EOW)
+    struct.pack_into("B", buf, 11, crc8(buf[2:11]))
+    fg.write(buf)
+    fg.flush()
+
+def cleanup(fi, fg, device, previous_baudrate, keep):
+    if not keep:
+        print "Resetting NMEA Speed: %d" % previous_baudrate
+        send_speed(fg, previous_baudrate, 3, 0.057)
+        fg.baudrate = previous_baudrate
+
+    if fg:
+        fg.close()
+    if fi:
+        fi.close()
+    subprocess.call("stty -F %s raw" % device, shell=True)
+
+def get_known_state(device, speed, previous_baudrate, keep):
+#    Make sure the unit is in NMEA mode
+    print "Making sure the unit is in NMEA mode"
+    for xrate in baudrate:
+        rate = baudrate[xrate]
+        fg = serial.Serial(port=device, timeout=5, baudrate=rate)
+        fg.flushInput()
+        set_nmea(fg, rate)
+        fg.flushInput()
+        set_nmea(fg, rate)
+        fg.flushInput()
+        set_nmea(fg, rate)
+        fg.close()
+        
+    tries = 0
+    while True:
+#    Get the speeds to match
+        print "Making sure the speeds match"
+        for xrate in baudrate:
+            rate = baudrate[xrate]
+            fg = serial.Serial(port=device, timeout=5, baudrate=rate)
+            fg.flushInput()
+            send_speed(fg, speed, 3, 0.123)
+            fg.close()
+
+        fg = serial.Serial(port=device, timeout=5, baudrate=speed)
+        fg.flushInput()
+        send_string(fg, "PMTK000")
+        resp = getNMEAResponse(fg, "PMTK001")
+        if resp[2] != '3':
+            fg.close()
+            print >> sys.stderr, "The GPS speed and the port speed couldn't be synchronized."
+            tries += 1
+            if tries < 2:
+                print "Retrying"
+            else:
+                cleanup(None, None, device, previous_baudrate, keep)
+                return None
+        else:
+            print "GPS and port are now synchronized at %d" % speed
+            return fg
+    
 def main():
     parser = argparse.ArgumentParser(fromfile_prefix_chars='@',
     description="Loads EPO data sets to MT3339 GPS",
     epilog="You can use '@filename' to read arguments from a file.")
     parser.convert_arg_line_to_args = convert_arg_line_to_args
     group = parser.add_argument_group(title="optional known time and location parameters")
-    group.add_argument("-t", "--time", dest="time_string", help="Current UTC", metavar="yyyy,mm,dd,hh,mm,ss")
+    group.add_argument("-t", "--time", dest="time_string", help="Current UTC or UTC from host", metavar="yyyy,mm,dd,hh,mm,ss | - ")
     group.add_argument("-l", "--location", dest="location_string", help="Current location specified in decimal degrees and meters", metavar="lat.dddddd,lon.dddddd,alt")
     
     parser.add_argument("-s", "--speed", type=int, default=115200, dest="speed", help="Interface speed", choices=[4800,9600,19200,38400,57600,115200])
@@ -125,21 +186,14 @@ def main():
 
     args = parser.parse_args()
 
-    p = subprocess.Popen("lsof -FpcL %s 2>/dev/null" % args.output_device,
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, close_fds=True, shell=True)
-    o = p.communicate()[0]
-    if len(o) > 0:
-        lines = o.split('\n')
-        print >> sys.stderr, "ERROR: Device %s is open by PID: %s  PROG: %s  USER: %s" % (args.output_device, lines[0][1:], lines[1][1:], lines[2][1:])
-        return 1;
-    
+    fi = None
     if args.input_file != "-":
         try:
             file_size = os.stat(args.input_file).st_size
             fi = io.open(args.input_file, mode="rb")
         except:
             print sys.exc_info()[1]
-            return 0
+            return 1
             
         header = fi.read(75)
         fi.close()
@@ -162,19 +216,24 @@ def main():
             return 1
 
         fi = io.open(args.input_file, mode="rb", buffering=0)
-    else:
-        fi = None
-            
+
+    p = subprocess.Popen("lsof -FpcL %s 2>/dev/null" % args.output_device,
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, close_fds=True, shell=True)
+    o = p.communicate()[0]
+    if len(o) > 0:
+        lines = o.split('\n')
+        print >> sys.stderr, "ERROR: Device %s is open by PID: %s  PROG: %s  USER: %s" % (args.output_device, lines[0][1:], lines[1][1:], lines[2][1:])
+        return 1;
+    
     stty = subprocess.check_output("stty -g -F %s" % args.output_device, shell=True).split(":")
     previous_baudrate = baudrate[stty[2]]
     print "Current port speed: %d" % previous_baudrate
     subprocess.call("stty -F %s raw" % args.output_device, shell=True)
+
+    fg = get_known_state(args.output_device, args.speed, previous_baudrate, args.keep_new_speed)
+    if fg is None:
+        return 1
     
-    fg = serial.Serial(port=args.output_device, timeout=5, baudrate=previous_baudrate)
-    send_speed(fg, args.speed, 3, 0.123)
-    fg.baudrate = args.speed
-    print "Set port speed: %d" % args.speed
-        
     time.sleep(0.500)
     if not args.location_string is None or not args.time_string is None:
         if args.time_string == "-":
@@ -189,12 +248,14 @@ def main():
         resp = getNMEAResponse(fg, "PMTK001")
         if resp[2] != '3':
             print  >> sys.stderr, "ERROR: Unable to set time."
+            cleanup(fi, fg, args.output_device, previous_baudrate, args.keep_new_speed)
             return 1
             
         send_string(fg, "PMTK741,%s,%s" % (args.location_string, time_string))
         resp = getNMEAResponse(fg, "PMTK001")
         if resp[2] != '3':
             print  >> sys.stderr, "ERROR: Unable to set location."
+            cleanup(fi, fg, args.output_device, previous_baudrate, args.keep_new_speed)
             return 1
 
     if args.clear_epo:
@@ -203,12 +264,13 @@ def main():
         resp = getNMEAResponse(fg, "PMTK001")
         if resp[2] != '3':
             print  >> sys.stderr, "ERROR: Unable to clear existing EPO data."
+            cleanup(fi, fg, args.output_device, previous_baudrate, args.keep_new_speed)
             return 1
         
     if fi is None:
-        fg.close()
+        cleanup(fi, fg, args.output_device, previous_baudrate, args.keep_new_speed)
         return 0
-        
+
     print "Setting binary mode, speed: %d" % args.speed
     send_string(fg, "PMTK253,1,%d" % args.speed)
     time.sleep(0.500)
@@ -257,6 +319,7 @@ def main():
         if failed:
             break
 
+    fi.close()
     if not failed:
         end = struct.unpack("<i", buf[8:11]+'\0')[0]
         buf = bytearray('\0' * FRAME_LENGTH)
@@ -271,26 +334,13 @@ def main():
             print "%4d sets sent.  Valid from %s to %s UTC" % (epo_sets,
             Convert2UTC(start),
             Convert2UTC(end+6))
-
-    time.sleep(1)
-    print "Resetting NMEA Mode"
-    buf = bytearray('\0' * 14)
-    struct.pack_into("<HHHBIBH", buf, 0, PREAMBLE, 14, UART_CMD, 0, args.speed, 0, EOW)
-    struct.pack_into("B", buf, 11, crc8(buf[2:11]))
-    fg.write(buf)
-    fg.flush()
-    resp = getResponse(fg, 1)
+    
+    set_nmea(fg, args.speed)
+    getResponse(fg, 1)
     send_string(fg, "PMTK607")
     resp = getNMEAResponse(fg, "PMTK707")
+    cleanup(fi, fg, args.output_device, previous_baudrate, args.keep_new_speed)
 
-    if not args.keep_new_speed:
-        print "Resetting NMEA Speed: %d" % previous_baudrate
-        send_speed(fg, previous_baudrate, 3, 0.057)
-        fg.baudrate = previous_baudrate
-
-    fg.close()
-    subprocess.call("stty -F %s raw" % args.output_device, shell=True)
-    
     vstart = (int(resp[2]) * 168 + int(resp[3]) / 3600)
     vend = (int(resp[4]) * 168 + int(resp[5]) / 3600)
     if vstart == start and vend == end:
