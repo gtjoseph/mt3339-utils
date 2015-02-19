@@ -175,7 +175,11 @@ def main():
         print >> sys.stderr, "ERROR: Device %s is open by PID: %s  PROG: %s  USER: %s" % (args.output_device, lines[0][1:], lines[1][1:], lines[2][1:])
         return 1;
     
-    stty = subprocess.check_output("stty -g -F %s" % args.output_device, shell=True).split(":")
+    try:
+        stty = subprocess.check_output("stty -g -F %s" % args.output_device, shell=True).split(":")
+    except:
+        return 1
+
     previous_baudrate = baudrate[stty[2]]
     print "Current port speed: %d" % previous_baudrate
     subprocess.call("stty -F %s raw" % args.output_device, shell=True)

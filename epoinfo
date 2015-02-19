@@ -81,7 +81,7 @@ def main():
     fi.close()
 
     print "%4d EPO sets.  Valid from %s to %s UTC\n" % (sets,
-    Convert2UTC(start),    Convert2UTC(epo_start + 6))
+    Convert2UTC(start), Convert2UTC(epo_start + 6))
     return 0
 
 if __name__ == "__main__":
