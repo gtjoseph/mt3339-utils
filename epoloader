@@ -8,6 +8,8 @@ import time
 import argparse
 import serial
 import subprocess
+import tty
+import termios
 
 PREAMBLE = 0x2404
 EPO_CMD = 0x02d2
@@ -20,12 +22,12 @@ SECONDS_PER_WEEK = 604800
 HOURS_PER_WEEK = 168
 
 baudrate = {
-    "8bc": 4800,
-    "8bd": 9600,
-    "8be": 19200,
-    "8bf": 38400,
-    "18b1": 57600,
-    "18b2": 115200,
+    termios.B4800: 4800,
+    termios.B9600: 9600,
+    termios.B19200: 19200,
+    termios.B38400: 38400,
+    termios.B57600: 57600,
+    termios.B115200: 115200,
 }
 
 def Convert2UTC(GPSHour):
@@ -115,7 +117,10 @@ def set_nmea(fg, rate):
     fg.flush()
 
 def cleanup(fi, fg, device, previous_baudrate, keep):
-    if not keep:
+    if fg:
+        tty.setraw(fg, tty.TCSANOW)
+
+    if fg and not keep:
         print "Resetting NMEA Speed: %d" % previous_baudrate
         send_speed(fg, previous_baudrate, 3, 0.057)
         fg.baudrate = previous_baudrate
@@ -124,7 +129,7 @@ def cleanup(fi, fg, device, previous_baudrate, keep):
         fg.close()
     if fi:
         fi.close()
-    subprocess.call("stty -F %s raw" % device, shell=True)
+
 
 def get_known_state(device, speed, previous_baudrate, keep):
 #    Make sure the unit is in NMEA mode
@@ -224,20 +229,24 @@ def main():
         lines = o.split('\n')
         print >> sys.stderr, "ERROR: Device %s is open by PID: %s  PROG: %s  USER: %s" % (args.output_device, lines[0][1:], lines[1][1:], lines[2][1:])
         return 1;
-    
+
     try:
-        stty = subprocess.check_output("stty -g -F %s" % args.output_device, shell=True).split(":")
+        tfg = os.open(args.output_device, os.O_RDWR)
     except:
+        print sys.exc_info()[1]
         return 1
-        
-    previous_baudrate = baudrate[stty[2]]
+
+    params = termios.tcgetattr(tfg);
+    previous_baudrate = baudrate[params[5]];
+    tty.setraw(tfg, tty.TCSANOW)
+    os.close(tfg)
+
     print "Current port speed: %d" % previous_baudrate
-    subprocess.call("stty -F %s raw" % args.output_device, shell=True)
 
     fg = get_known_state(args.output_device, args.speed, previous_baudrate, args.keep_new_speed)
     if fg is None:
         return 1
-    
+
     time.sleep(0.500)
     if not args.location_string is None or not args.time_string is None:
         if args.time_string == "-":

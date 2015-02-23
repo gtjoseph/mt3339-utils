@@ -1,32 +1,234 @@
-#!/bin/bash
+#!/usr/bin/python
 
-${1:?You must specify a device}
+import sys
+import os
+import time
+import tty
+import termios
+import argparse
+import curses
+import serial
+import re
+import locale
+import math
+locale.setlocale(locale.LC_ALL, '')
+code = locale.getpreferredencoding()
 
-if [ ! -c $1 ] ; then
-	echo "ERROR: $1 is not a charqacter device."
-	exit 1
-fi
+SECONDS_PER_HOUR = 3600
+GPS_OFFSET_SECONDS = 315964786
+SECONDS_PER_WEEK = 604800
+HOURS_PER_WEEK = 168
 
-clear
+baudrate = {
+    termios.B4800: 4800,
+    termios.B9600: 9600,
+    termios.B19200: 19200,
+    termios.B38400: 38400,
+    termios.B57600: 57600,
+    termios.B115200: 115200,
+}
 
-declare -i fix_start=0
-declare -i ttff=0
-while read line ; do
-	if [[ ${line:1:5} == "GPGGA" ]] ; then
-		clear
-		if [[ ${line} =~ ,,,,, ]] ; then
-			ttff=$(( $SECONDS - $fix_start ))
-			echo "NO FIX  WAITING: $ttff"
-		else
-			fix_start=0
-			echo "FIX  TTFF: $ttff"
-		fi
-		gpssend PMTK607 $1
-	fi
-	if [[ ${line:1:7} == "PMTK011" ]] ; then
-		fix_start=$SECONDS
-	fi
-	echo $line
-done < $1
+def Convert2UTC(GPSHour):
+    GPSHour *= SECONDS_PER_HOUR
+    GPSHour += GPS_OFFSET_SECONDS
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(GPSHour))
 
+def Convert2Local(GPSHour):
+    GPSHour *= SECONDS_PER_HOUR
+    GPSHour += GPS_OFFSET_SECONDS
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(GPSHour))
 
+def crc8(d):
+    crc = 0
+    for b in bytearray(d):
+        crc ^= (b & 0xff)
+    return crc
+
+def convert_arg_line_to_args(arg_line):
+    for arg in arg_line.split():
+        if not arg.strip():
+            continue
+        yield arg
+
+def send_string(fg, string):
+    fg.flushInput()
+    fg.write("$%s*%02x\r\n" % (string, crc8(string)))
+    fg.flushOutput()
+
+w = {}
+s = {}
+f = {}
+
+ll = re.compile(r"(\d?\d\d)(\d\d)(\.\d\d\d\d)")
+
+fix = {
+       '0': "Invalid",
+       '1': "GPS",
+       '2': "DGPS"}
+
+speed_units = {
+               "N": "Knots",
+               "K": "KPH"
+               }
+def GPGLL(a):
+    w = s['LOC']
+    if len(a[1]) < 3 or len(a[3]) < 3:
+        w.erase()
+        w.refresh()
+        return;
+    
+    lat = ll.split(a[1])
+    lon = ll.split(a[3])
+    st = "Latitude: %s%s %s' %05.2f\" %s  Longitude: %s%s %s' %05.2f\" %s" % \
+             (lat[1], unichr(0xb0).encode(code), lat[2], float(lat[3]) * 60.0, a[2],
+              lon[1], unichr(0xb0).encode(code), lon[2], float(lon[3]) * 60.0, a[4])
+    w.derwin(1, len(st), 0, 0).erase()
+    w.addstr(0, 0, st)
+    w.refresh()
+
+def GPGGA(a):
+    w = s['LOC']
+    if len(a[2]) < 3 or len(a[4]) < 4:
+        w.erase()
+        w.refresh()
+        return;
+
+#    015256.000,3946.0024,N,10513.9030,W,2,06,2.01,1780.0,M,-20.7,M,0000,0000    
+    lat = ll.split(a[2])
+    lon = ll.split(a[4])
+    st = "Latitude: %s%s %s' %05.2f\" %s  Longitude: %s%s %s' %05.2f\" %s  Altitude: %s %s" % \
+             (lat[1], unichr(0xb0).encode(code), lat[2], float(lat[3]) * 60.0, a[3],
+              lon[1], unichr(0xb0).encode(code), lon[2], float(lon[3]) * 60.0, a[5], a[9], a[10])
+    w.derwin(1, len(st), 0, 0).erase()
+    w.addstr(0, 0, st)
+    
+    st = "Fix Type: %7s  Satellites: %3s HDOP: %5s" % (fix[a[6]], a[7], a[8])
+    w.derwin(1, len(st), 1, 0).erase()
+    w.addstr(1, 0, st)
+    w.refresh()
+
+def GPVTG(a):
+    w = s['NAV']
+    if len(a[1]) < 3:
+        w.erase()
+        w.refresh()
+        return;
+    
+    st = "Track: %3d%s True  Speed: %5s %s"  % (math.floor(float(a[1])), unichr(0xb0).encode(code), a[5], speed_units[a[6]])
+    w.derwin(1, len(st), 0, 0).erase()
+    w.addstr(0, 0, st)
+    w.refresh()
+
+def GPRMC(a):
+    w = s['LOC']
+    w.erase()
+#     015501.000,A,3946.0030,N,10513.9077,W,1.21,323.02,230215,,,D
+    lat = ll.split(a[2])
+    lon = ll.split(a[4])
+    if len(lat) < 3 or len(lon) < 3: return;
+    w.addstr(0, 0, "Latitude: %s%s %s' %05.2f\" %s  Longitude: %s%s %s' %05.2f\" %s  Altitude: %s %s" % \
+             (lat[1], unichr(0xb0).encode(code), lat[2], float(lat[3]) * 60.0, a[3],
+              lon[1], unichr(0xb0).encode(code), lon[2], float(lon[3]) * 60.0, a[5], a[9], a[10]))
+    w.refresh()
+
+ 
+def main():
+    parser = argparse.ArgumentParser(fromfile_prefix_chars='@',
+    description="Displays NMEA Data",
+    epilog="You can use '@filename' to read arguments from a file.")
+    parser.convert_arg_line_to_args = convert_arg_line_to_args
+    parser.add_argument("gps_device", metavar="<GPS_Device>", help="GPS Device")
+    args = parser.parse_args()
+
+    stdscr = curses.initscr()
+    curses.start_color();
+    curses.noecho()
+    curses.cbreak()
+    curses.curs_set(0)
+    stdscr.keypad(1)
+    stdscr.nodelay(1)
+    curses.init_pair(1, curses.COLOR_RED, curses.COLOR_WHITE)
+    
+    fg = None
+    vcount = 0
+    x = 0
+    y = 0 
+    try:
+    
+        w['NMEA'] = curses.newwin(12, 90, 14, 0)
+        w['NMEA'].border()
+        w['NMEA'].addstr(0, 2, "NMEA ")
+        w['NMEA'].nodelay(1)
+        w['NMEA'].refresh()
+        y, x = w['NMEA'].getmaxyx()
+        s['NMEA'] = w['NMEA'].derwin(y-2, x-2, 1, 1)
+        s['NMEA'].setscrreg(0, y-3)
+        s['NMEA'].scrollok(True)
+        
+
+        w['LOC'] = curses.newwin(4, 90, 0, 0)
+        w['LOC'].border()
+        w['LOC'].addstr(0, 2, "Location ")
+        w['LOC'].refresh()
+        y, x = w['LOC'].getmaxyx()
+        s['LOC'] = w['LOC'].derwin(y-2, x-2, 1, 1)
+        
+        w['NAV'] = curses.newwin(4, 90, 4, 0)
+        w['NAV'].border()
+        w['NAV'].addstr(0, 2, "Navigation ")
+        w['NAV'].refresh()
+        y, x = w['NAV'].getmaxyx()
+        s['NAV'] = w['NAV'].derwin(y-2, x-2, 1, 1)
+        
+        
+        
+        f['GPGLL'] = GPGLL
+        f['GPGGA'] = GPGGA
+        f['GPVTG'] = GPVTG
+        
+        
+        tfg = os.open(args.gps_device, os.O_RDWR)
+        params = termios.tcgetattr(tfg);
+        previous_baudrate = baudrate[params[5]];
+        tty.setraw(tfg, tty.TCSANOW)
+        os.close(tfg)
+    
+        fg = serial.Serial(port=args.gps_device, timeout=5, baudrate=previous_baudrate)
+        last_sent = int(time.time())
+        
+        while True:
+            line = fg.readline()
+            qq = w['NMEA'].getch()
+            if qq == ord('q'):
+                break
+            
+            line = line.strip()
+            if len(line) == 0 or line[0] != "$":
+                continue;
+            line = line[1:-3]
+            a = line.split(',')
+            stype = a[0]
+            
+            if stype in f:
+                f[stype](a)
+
+            y, x = s['NMEA'].getmaxyx()
+            if vcount == y-1:
+                s['NMEA'].scroll(1)     
+            s['NMEA'].addstr(vcount, 0, line)
+            s['NMEA'].refresh()
+            if vcount < y-1:
+                vcount += 1
+
+#            tm = int(time.time())
+#            if tm % 10 == 0 and last_sent != tm:
+#                send_string(fg, "PMTK607")
+#                last_sent = tm
+    finally:
+        if fg:
+            fg.close()
+        curses.nocbreak(); curses.echo()
+        curses.endwin()    
+    
+if __name__ == "__main__":
+    sys.exit(main() or 0)

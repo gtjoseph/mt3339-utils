@@ -1,5 +1,6 @@
 #!/usr/bin/python
 
+
 import sys
 import io
 import struct
@@ -8,6 +9,8 @@ import argparse
 import serial
 import subprocess
 from os.path import dirname
+import termios
+import tty
 
 PREAMBLE = 0x2404
 EPO_CMD = 0x02d2
@@ -16,12 +19,12 @@ UART_CMD = 253
 DEFAULT_COMMAND="PMTK314,1,1,1,1,5,5,0,0,0,0,0,0,0,0,0,0,0,1,0"
 
 baudrate = {
-    "8bc": 4800,
-    "8bd": 9600,
-    "8be": 19200,
-    "8bf": 38400,
-    "18b1": 57600,
-    "18b2": 115200,
+    termios.B4800: 4800,
+    termios.B9600: 9600,
+    termios.B19200: 19200,
+    termios.B38400: 38400,
+    termios.B57600: 57600,
+    termios.B115200: 115200,
 }
 
 def crc8(d):
@@ -175,20 +178,12 @@ def main():
         print >> sys.stderr, "ERROR: Device %s is open by PID: %s  PROG: %s  USER: %s" % (args.output_device, lines[0][1:], lines[1][1:], lines[2][1:])
         return 1;
     
-    try:
-        stty = subprocess.check_output("stty -g -F %s" % args.output_device, shell=True).split(":")
-    except:
-        return 1
-
-    previous_baudrate = baudrate[stty[2]]
-    print "Current port speed: %d" % previous_baudrate
-    subprocess.call("stty -F %s raw" % args.output_device, shell=True)
-
 #    Make sure the unit is in NMEA mode
     print "Making sure the unit is in NMEA mode"
     for xrate in baudrate:
         rate = baudrate[xrate]
         fg = serial.Serial(port=args.output_device, timeout=5, baudrate=rate)
+        tty.setraw(fg, tty.TCSANOW)
         fg.flushInput()
         set_nmea(fg, rate)
         fg.flushInput()
@@ -204,11 +199,13 @@ def main():
         for xrate in baudrate:
             rate = baudrate[xrate]
             fg = serial.Serial(port=args.output_device, timeout=5, baudrate=rate)
+            tty.setraw(fg, tty.TCSANOW)
             fg.flushInput()
             send_speed(fg, args.speed, 3, 0.123)
             fg.close()
 
         fg = serial.Serial(port=args.output_device, timeout=5, baudrate=args.speed)
+        tty.setraw(fg, tty.TCSANOW)
         fg.flushInput()
         send_string(fg, "PMTK000")
         resp = getNMEAResponse(fg, "PMTK001")
@@ -218,8 +215,8 @@ def main():
             if tries < 2:
                 print "Retrying"
             else:
+                tty.setraw(fg, tty.TCSANOW)
                 fg.close()
-                subprocess.call("stty -F %s raw" % args.output_device, shell=True)
                 return 1
         else:
             print "GPS and port are now synchronized at %d" % args.speed
@@ -248,8 +245,8 @@ def main():
     else:
         fg = process_line(fg, args.output_device, args.speed, DEFAULT_COMMAND)
     
+    tty.setraw(fg, tty.TCSANOW)
     fg.close()
-    subprocess.call("stty -F %s raw" % args.output_device, shell=True)
         
 if __name__ == "__main__":
     sys.exit(main() or 0)
