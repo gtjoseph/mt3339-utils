@@ -83,10 +83,14 @@ def format_heading(heading, ref):
         return "     "
     
 def draw_string(w, row, col, st, erase=-1, refresh=False):
-    if erase < 0: erase = len(st) 
+    if erase < 0: erase = len(st)
+    
+    t1 = w.instr(row, col, erase)
+    if (st == t1): return False
     w.derwin(1, erase, row, col).erase()
     w.addnstr(row, col, st[0:erase], erase)
     if refresh: w.refresh()
+    return True
     
 def draw_nav():
     w = s['NAV']
@@ -127,12 +131,12 @@ def clear_nav():
     draw_string(w, 0, 11, "", 18)
     draw_string(w, 1, 11, "", 18)
     draw_string(w, 2, 11, "", 18)
-    draw_string(w, 0, 37, "", 12)
-    draw_string(w, 1, 37, "", 12)
-    draw_string(w, 2, 37, "", 9)
-    draw_string(w, 0, 67, "", 9)  
-    draw_string(w, 1, 67, "", 9)
-    draw_string(w, 2, 67, "", 10)
+    draw_string(w, 0, 37, "", 16)
+    draw_string(w, 1, 37, "", 16)
+    draw_string(w, 2, 37, "", 16)
+    draw_string(w, 0, 67, "", 11)  
+    draw_string(w, 1, 67, "", 11)
+    draw_string(w, 2, 67, "", 11)
     w.refresh()  
 
 def clear_time():
@@ -166,17 +170,32 @@ def draw_win(wid, name, rows, cols, row, col):
     s[wid] = w[wid].derwin(y-2, x-2, 1, 1)
     if wid in draws: draws[wid]()
     
+def update_loc(lat, latdir, lon, londir):
+    w = s['NAV']
+    refresh = draw_string(w, 0, 11, format_dms(lat, latdir), 18)
+    refresh |= draw_string(w, 1, 11, format_dms(lon, londir), 18)
+    return refresh
+ 
+def update_alt(alt, units):
+    w = s['NAV']
+    return draw_string(w, 2, 11, "%6s %s" % (alt, (len(alt) and units or "")), 18)
+            
+def update_time(date, time):
+    w = s['TIME']
+    refresh = False
+    if date:    
+        refresh |= draw_string(w, 0, 6, date, 10)
+    refresh |= draw_string(w, 0, 24, time, 8)
+    return refresh
+    
 def GPGGA(a):
     w = s['NAV']
     global lostfix, hasfix, gotfix
+    refresh = False
 
-#    015256.000,3946.0024,N,10513.9030,W,2,06,2.01,1780.0,M,-20.7,M,0000,0000
-
-    draw_string(s['TIME'], 0, 24, "%2s:%2s:%2s" % (a[1][0:2], a[1][2:4],a[1][4:6]), refresh=True)
-
-    draw_string(w, 0, 11, format_dms(a[2], a[3]), 18)
-    draw_string(w, 1, 11, format_dms(a[4], a[5]), 18)
-    draw_string(w, 2, 11, "%6s %s" % (a[9], (len(a[9]) and a[10] or "")), 18)
+    refresh |= update_time(None, "%2s:%2s:%2s" % (a[1][0:2], a[1][2:4],a[1][4:6]))
+    refresh |= update_loc(a[2], a[3], a[4], a[5])
+    refresh |= update_alt(a[9], a[10])
 
     newhasfix = (fix[a[6]] != "Invalid")
 
@@ -192,30 +211,31 @@ def GPGGA(a):
         ttff = gotfix - lostfix
     else:
         ttff = time.time() - lostfix
-        
-    draw_string(w, 0, 67, "%-7s %3s" % (fix[a[6]], (newhasfix and modes['2'] or "")), 9)  
-    draw_string(w, 1, 67, "%-3s" % a[7], 9)
-    draw_string(w, 2, 67, "%d" % ttff, 9)  
-    draw_string(w, 2, 37, "%-5s" % a[8], 9)
-    w.refresh()
+    
+    refresh |= draw_string(w, 0, 67, "%-7s %3s" % (fix[a[6]], (newhasfix and modes['2'] or "")), 11)  
+    refresh |= draw_string(w, 1, 67, "%-3s" % a[7], 11)
+    refresh |= draw_string(w, 2, 67, "%d" % ttff, 11)  
+    refresh |= draw_string(w, 2, 37, "%-5s" % a[8], 11)
+    
+    if refresh: w.refresh()
 
 def GPGLL(a):
     w = s['NAV']
     if len(a[5]):
-        draw_string(s['TIME'], 0, 24, "%2s:%2s:%2s" % (a[5][0:2], a[5][2:4],a[5][4:6]), refresh=True)
-    draw_string(w, 0, 11, format_dms(a[1], a[2]), 18)
-    draw_string(w, 1, 11, format_dms(a[3], a[4]), 18, refresh=True)
+        update_time(None, "%2s:%2s:%2s" % (a[5][0:2], a[5][2:4],a[5][4:6]))
+    if update_loc(a[1], a[2], a[3], a[4]): w.refresh
 
 def GPRMC(a):
     w = s['NAV']
+    refresh = False
     if len(a) < 9: return
     
     if len(a[9]):
-        draw_string(s['TIME'], 0, 6, "20%2s-%2s-%2s" % (a[9][4:6], a[9][2:4], a[9][0:2]))
-    if len(a[1]):
-        draw_string(s['TIME'], 0, 24, "%2s:%2s:%2s" % (a[1][0:2], a[1][2:4],a[1][4:6]), refresh=True)
-    draw_string(w, 0, 11, format_dms(a[3], a[4]), 18)
-    draw_string(w, 1, 11, format_dms(a[5], a[6]), 18, refresh=True)
+        refresh |= update_time("20%2s-%2s-%2s" % (a[9][4:6], a[9][2:4], a[9][0:2]),
+            "%2s:%2s:%2s" % (a[1][0:2], a[1][2:4],a[1][4:6]))
+        
+    refresh |= update_loc(a[3], a[4], a[5], a[6])
+    if refresh: w.refresh()
 
 def GPGSA(a):
     modes['1'] = a[1]
@@ -223,10 +243,11 @@ def GPGSA(a):
     
 def GPGSV(a):
     w = s['SAT']
+    refresh = False
         
-    messages = a[1].isdigit() and int(a[1]) or 0
+#    messages = a[1].isdigit() and int(a[1]) or 0
     message = a[2].isdigit() and int(a[2]) or 0
-    siv = a[3].isdigit() and int(a[3]) or 0
+#    siv = a[3].isdigit() and int(a[3]) or 0
     s1 = a[4:8]
     s2 = a[8:12]
     s3 = a[12:16]
@@ -236,14 +257,17 @@ def GPGSV(a):
     
     for i in range(0,4):
         try:
-            draw_string(w, i, col, "%3s  %3s  %3s  %3s  " % (s1[i], s2[i], s3[i], s4[i])) 
+            t1 = w.instr(i, col, 20)
+            t2 = "%3s  %3s  %3s  %3s  " % (s1[i], s2[i], s3[i], s4[i])
+            if (t2 != t1):
+                refresh |= draw_string(w, i, col, t2) 
         except:
             try:
-                draw_string(w, i, col, "", 20)
+                refresh |= draw_string(w, i, col, "", 20)
             except:
                 pass 
     
-    w.refresh()
+    if refresh: w.refresh()
 
 def GPVTG(a):
     w = s['NAV']
@@ -251,7 +275,11 @@ def GPVTG(a):
         w.erase()
         w.refresh()
 
-    draw_string(w, 0, 37, "%5s" % (format_heading(a[1], a[2])), 12)
+    refresh = False
+    t1 = w.instr(0, 37, 12)
+    t2 = format_heading(a[1], a[2])
+    if t2 != t1:
+        refresh |= draw_string(w, 0, 37, "%5s" % t2, 12)
     try:
         s1 = float(a[5])
         s2 = float(a[7])
@@ -259,7 +287,12 @@ def GPVTG(a):
         s1 = 0.0
         s2 = 0.0
 
-    draw_string(w, 1, 37, "%5.1f%s %5.1f%s" % (s1, speed_units[a[6]], s2, speed_units[a[8]]), 15, True)      
+    t1 = w.instr(1, 37, 16)
+    t2 = "%5.1f%s %5.1f%s" % (s1, speed_units[a[6]], s2, speed_units[a[8]])
+    if t2 != t1:
+        refresh |= draw_string(w, 1, 37, t2, 16, True)
+        
+    if refresh: w.refresh()      
 
 def GPZDA(a):
     w = s['TIME']
@@ -267,9 +300,10 @@ def GPZDA(a):
         w.erase()
         w.refresh()
         return;
-    
-    draw_string(w, 0, 6, "%4s-%2s-%2s" % (a[4], a[3], a[2]))
-    draw_string(w, 0, 24, "%2s:%2s:%2s" % (a[1][0:2], a[1][2:4],a[1][4:6]), refresh=True)
+
+    update_time("%4s-%2s-%2s" % (a[4], a[3], a[2]), 
+        "%2s:%2s:%2s" % (a[1][0:2], a[1][2:4],a[1][4:6]))
+    w.refresh()
 
 def PMTK707(a):
     w = s['SAT']
@@ -285,7 +319,9 @@ def PMTK707(a):
     else:
         st = "Not valid"
         
-    draw_string(w, 5, 7, st, refresh=True)
+    t1 = w.instr(5, 7, len(st))
+    if st != t1:
+        draw_string(w, 5, 7, st, refresh=True)
     
 def PMTK010(a):
     if a[1] == "002":
