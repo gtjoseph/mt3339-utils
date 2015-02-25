@@ -334,7 +334,8 @@ you and writes the result to the GPS device.
 ```
 gpsstatus <gps_device>
 ```	
-This shell script just displays the output of the GPS unit and calculates the time to first fix.
+Displays gps status information
+
 
 	
 

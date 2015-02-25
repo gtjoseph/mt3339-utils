@@ -1,32 +1,514 @@
-#!/bin/bash
+#!/usr/bin/python
 
-${1:?You must specify a device}
+import sys
+import os
+import time
+import tty
+import termios
+import argparse
+import select
+import curses
+import serial
+import struct
+import re
+import locale
+import math
+import fcntl
+import signal
+from threading import Thread
+from collections import defaultdict
 
-if [ ! -c $1 ] ; then
-	echo "ERROR: $1 is not a charqacter device."
-	exit 1
-fi
+SECONDS_PER_HOUR = 3600
+GPS_OFFSET_SECONDS = 315964786
+SECONDS_PER_WEEK = 604800
+HOURS_PER_WEEK = 168
 
-clear
+locale.setlocale(locale.LC_ALL, '')
+code = locale.getpreferredencoding()
+degree = unichr(0xb0).encode(code)
 
-declare -i fix_start=0
-declare -i ttff=0
-while read line ; do
-	if [[ ${line:1:5} == "GPGGA" ]] ; then
-		clear
-		if [[ ${line} =~ ,,,,, ]] ; then
-			ttff=$(( $SECONDS - $fix_start ))
-			echo "NO FIX  WAITING: $ttff"
-		else
-			fix_start=0
-			echo "FIX  TTFF: $ttff"
-		fi
-		gpssend PMTK607 $1
-	fi
-	if [[ ${line:1:7} == "PMTK011" ]] ; then
-		fix_start=$SECONDS
-	fi
-	echo $line
-done < $1
+width = 80
+gps_device = None
+hasfix = False
+lostfix = time.time()
+gotfix = time.time()
+paused = False
+nmea_paused = False
+stdscr = None
+ll = re.compile(r"(\d?\d\d)(\d\d)(\.\d\d\d\d)")
+fix = defaultdict(lambda: "Invalid", {"0": "Invalid", "1": "GPS", "2": "DGPS", "6":"DRM"})
+speed_units = defaultdict(lambda: "??",{"N": "Kn", "K": "KPH"})
+modes_t = defaultdict(lambda: "", {"1": "", "2": "2D", "3": "3D"})
+modes = defaultdict(lambda: "N/A")
+draws = {}
+clears = {}
+w = {}
+s = {}
+f = {}
 
+baudrate = {
+    termios.B4800: 4800,
+    termios.B9600: 9600,
+    termios.B19200: 19200,
+    termios.B38400: 38400,
+    termios.B57600: 57600,
+    termios.B115200: 115200,
+}
 
+def Convert2UTC(GPSHour):
+    GPSHour *= SECONDS_PER_HOUR
+    GPSHour += GPS_OFFSET_SECONDS
+    return time.strftime("%Y-%m-%d %H:%M:%SZ", time.gmtime(GPSHour))
+
+def Convert2Local(GPSHour):
+    GPSHour *= SECONDS_PER_HOUR
+    GPSHour += GPS_OFFSET_SECONDS
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(GPSHour))
+
+def crc8(d):
+    crc = 0
+    for b in bytearray(d):
+        crc ^= (b & 0xff)
+    return crc
+
+def convert_arg_line_to_args(arg_line):
+    for arg in arg_line.split():
+        if not arg.strip():
+            continue
+        yield arg
+
+def send_string(fg, string):
+    fg.flushInput()
+    fg.write("$%s*%02x\r\n" % (string, crc8(string)))
+    fg.flushInput()
+    fg.flushOutput()
+
+def format_dms(dddmm, direction):
+    s = ll.split(dddmm)
+    if len(s) < 3:
+        return " " * 17
+    return "%3s%s %2s' %05.2f\" %s" % \
+        (s[1], unichr(0xb0).encode(code), s[2], float(s[3]) * 60.0, direction)
+
+def format_heading(heading, ref):
+    try:
+        return "%3d%s%s" % (math.floor(float(heading)), unichr(0xb0).encode(code), ref)
+    except:
+        return "     "
+    
+def draw_string(w, row, col, st, erase=-1, refresh=False):
+    if erase < 0: erase = len(st)
+    
+    t1 = w.instr(row, col, erase)
+    if (st == t1): return False
+    w.derwin(1, erase, row, col).erase()
+    w.addnstr(row, col, st[0:erase], erase)
+    if refresh: w.refresh()
+    return True
+
+def draw_win(wid, name, rows, cols, row, col):
+    w[wid] = curses.newwin(rows, cols, row, col)
+    w[wid].border()
+    w[wid].addstr(0, 2, name)
+    w[wid].refresh()
+    y, x = w[wid].getmaxyx()
+    s[wid] = w[wid].derwin(y-2, x-2, 1, 1)
+    if wid in draws: draws[wid]()
+    
+def draw_nav():
+    w = s['NAV']
+    draw_string(w, 0, 0, " Latitude: ")
+    draw_string(w, 1, 0, "Longitude: ")
+    draw_string(w, 2, 0, " Altitude: ")
+
+    draw_string(w, 0, 30, "Track: ")
+    draw_string(w, 1, 30, "Speed: ")
+    draw_string(w, 2, 30, " HDOP: ")
+    
+    draw_string(w, 0, 55, "  Fix Type: ")
+    draw_string(w, 1, 55, "Satellites: ")
+    draw_string(w, 2, 55, "      TTFF: ")
+    w.refresh()
+draws['NAV'] = draw_nav    
+
+def draw_time():
+    w = s['TIME']
+    draw_string(w, 0, 0, "Date: ")
+    draw_string(w, 0, 18, "Time: ")
+    draw_string(w, 0, 33, "UTC")
+draws['TIME'] = draw_time    
+
+def draw_sat():
+    w = s['SAT']
+    draw_string(w, 0, 0, "  Sat: ")
+    draw_string(w, 1, 0, "Elev%s: " % degree)
+    draw_string(w, 2, 0, "  Az%s: " % degree)
+    draw_string(w, 3, 0, "  SNR: ")
+    y, x = w.getmaxyx()
+    w.hline(4, 0, curses.ACS_HLINE, x)
+    draw_string(w, 5, 0, "  EPO: ")
+    w.refresh()
+draws['SAT'] = draw_sat
+
+def clear_nav():
+    w = s['NAV']
+    draw_string(w, 0, 11, "", 18)
+    draw_string(w, 1, 11, "", 18)
+    draw_string(w, 2, 11, "", 18)
+    draw_string(w, 0, 37, "", 16)
+    draw_string(w, 1, 37, "", 16)
+    draw_string(w, 2, 37, "", 16)
+    draw_string(w, 0, 67, "", 11)  
+    draw_string(w, 1, 67, "", 11)
+    draw_string(w, 2, 67, "", 11)
+    w.refresh()  
+clears['NAV'] = clear_nav
+
+def clear_time():
+    w = s['TIME']
+    draw_string(w, 0, 6, "", 10)
+    draw_string(w, 0, 24, "", 8)
+    w.refresh()
+clears['TIME'] = clear_time
+
+def clear_status():
+    draw_string(s['STATUS'], 0, 0, paused and "Paused" or "Running", 15, refresh=True) 
+clears['STATUS'] = clear_status
+
+def clear_sat():
+    w = s['SAT']
+    w.derwin(4, 16 * 4, 0, 7).erase()
+    w.derwin(1, 70, 5, 7).erase()
+    w.refresh()
+clears['SAT'] = clear_sat
+
+def clear_nmea():
+    w = s['NMEA']
+    w.erase()
+    w.refresh()
+clears['NMEA'] = clear_nmea
+
+def update_loc(lat, latdir, lon, londir):
+    w = s['NAV']
+    refresh = draw_string(w, 0, 11, format_dms(lat, latdir), 18)
+    refresh |= draw_string(w, 1, 11, format_dms(lon, londir), 18)
+    return refresh
+ 
+def update_alt(alt, units):
+    w = s['NAV']
+    return draw_string(w, 2, 11, "%6s %s" % (alt, (len(alt) and units or "")), 18)
+            
+def update_time(date, time):
+    w = s['TIME']
+    refresh = False
+    if date:    
+        refresh |= draw_string(w, 0, 6, date, 10)
+    refresh |= draw_string(w, 0, 24, time, 8)
+    return refresh
+    
+def GPGGA(a):
+    w = s['NAV']
+    global lostfix, hasfix, gotfix
+    refresh = False
+
+    refresh |= update_time(None, "%2s:%2s:%2s" % (a[1][0:2], a[1][2:4],a[1][4:6]))
+    refresh |= update_loc(a[2], a[3], a[4], a[5])
+    refresh |= update_alt(a[9], a[10])
+
+    newhasfix = (fix[a[6]] != "Invalid")
+
+    if hasfix and not newhasfix:
+        lostfix = time.time()
+        
+    if not hasfix and newhasfix:
+        gotfix = time.time()
+        
+    hasfix = newhasfix
+    
+    if hasfix:
+        ttff = gotfix - lostfix
+    else:
+        ttff = time.time() - lostfix
+    
+    refresh |= draw_string(w, 0, 67, "%-7s %3s" % (fix[a[6]], (newhasfix and modes['2'] or "")), 11)  
+    refresh |= draw_string(w, 1, 67, "%-3s" % a[7], 11)
+    refresh |= draw_string(w, 2, 67, "%d" % ttff, 11)  
+    refresh |= draw_string(w, 2, 37, "%-5s" % a[8], 11)
+    
+    if refresh: w.refresh()
+f['GPGGA'] = GPGGA
+
+def GPGLL(a):
+    w = s['NAV']
+    if len(a[5]):
+        update_time(None, "%2s:%2s:%2s" % (a[5][0:2], a[5][2:4],a[5][4:6]))
+    if update_loc(a[1], a[2], a[3], a[4]): w.refresh
+f['GPGLL'] = GPGLL
+
+def GPRMC(a):
+    w = s['NAV']
+    refresh = False
+    if len(a) < 9: return
+    
+    if len(a[9]):
+        refresh |= update_time("20%2s-%2s-%2s" % (a[9][4:6], a[9][2:4], a[9][0:2]),
+            "%2s:%2s:%2s" % (a[1][0:2], a[1][2:4],a[1][4:6]))
+        
+    refresh |= update_loc(a[3], a[4], a[5], a[6])
+    if refresh: w.refresh()
+f['GPRMC'] = GPRMC
+
+def GPGSA(a):
+    modes['1'] = a[1]
+    modes['2'] = modes_t[a[2]]
+f['GPGSA'] = GPGSA
+
+def GPGSV(a):
+    w = s['SAT']
+    refresh = False
+        
+#    messages = a[1].isdigit() and int(a[1]) or 0
+    message = a[2].isdigit() and int(a[2]) or 0
+#    siv = a[3].isdigit() and int(a[3]) or 0
+    s1 = a[4:8]
+    s2 = a[8:12]
+    s3 = a[12:16]
+    s4 = a[16:20]
+    
+    col = 7 + ((message - 1) * 20)
+    
+    for i in range(0,4):
+        try:
+            t1 = w.instr(i, col, 20)
+            t2 = "%3s  %3s  %3s  %3s  " % (s1[i], s2[i], s3[i], s4[i])
+            if (t2 != t1):
+                refresh |= draw_string(w, i, col, t2) 
+        except:
+            try:
+                refresh |= draw_string(w, i, col, "", 20)
+            except:
+                pass 
+    
+    if refresh: w.refresh()
+f['GPGSV'] = GPGSV
+
+def GPVTG(a):
+    w = s['NAV']
+    refresh = False
+    t1 = w.instr(0, 37, 12)
+    t2 = format_heading(a[1], a[2])
+    if t2 != t1:
+        refresh |= draw_string(w, 0, 37, "%5s" % t2, 12)
+    try:
+        s1 = float(a[5])
+        s2 = float(a[7])
+    except:
+        s1 = 0.0
+        s2 = 0.0
+
+    t1 = w.instr(1, 37, 16)
+    t2 = "%5.1f%s %5.1f%s" % (s1, speed_units[a[6]], s2, speed_units[a[8]])
+    if t2 != t1:
+        refresh |= draw_string(w, 1, 37, t2, 16, True)
+        
+    if refresh: w.refresh()      
+f['GPVTG'] = GPVTG
+
+def GPZDA(a):
+    w = s['TIME']
+    update_time("%4s-%2s-%2s" % (a[4], a[3], a[2]), 
+        "%2s:%2s:%2s" % (a[1][0:2], a[1][2:4],a[1][4:6]))
+    w.refresh()
+f['GPZDA'] = GPZDA
+
+def PMTK707(a):
+    w = s['SAT']
+    sets = a[1].isdigit() and int(a[1]) or 0
+    
+    ct = math.floor((time.time() - GPS_OFFSET_SECONDS) / SECONDS_PER_HOUR)
+    
+    if sets > 0:
+        startw = (int(a[2]) * 168 + int(a[3]) / 3600)
+        endw = (int(a[4]) * 168 + int(a[5]) / 3600)
+        st = " %s   to   %s   Status: %s" % (Convert2UTC(startw), Convert2UTC(endw),
+            ((ct >= startw and ct <= endw) and "Usable" or "Unusable"))
+    else:
+        st = "Not valid"
+        
+    t1 = w.instr(5, 7, len(st))
+    if st != t1:
+        draw_string(w, 5, 7, st, refresh=True)
+f['PMTK707'] = PMTK707
+    
+def PMTK010(a):
+    global lostfix
+    if a[1] == "002":
+        for t in clears:
+            clears[t]()
+    lostfix = time.time()            
+    draw_string(s['STATUS'], 0, 0, "Running", 14,  refresh=True)
+f['PMTK010'] = PMTK010
+    
+def getheightwidth():
+    try:
+        return int(os.environ["LINES"]), int(os.environ["COLUMNS"])
+    except KeyError:
+        height, width = struct.unpack(
+            "hhhh", fcntl.ioctl(0, termios.TIOCGWINSZ ,"\000"*8))[0:2]
+        if not height: return 25, 80
+        return height, width
+
+class inputloop(Thread):
+    def __init__(self, fg):
+        Thread.__init__(self)
+        self.fg = fg
+            
+    def run(self):
+        global paused, nmea_paused, stdscr
+        while True:
+            qq = stdscr.getch()
+            
+            if qq == ord('q'):
+                draw_string(s['STATUS'], 0, 0, "Terminating", 15, refresh=True)
+                break
+            elif qq == ord('p'):
+                paused = not paused
+                if paused: 
+                    draw_string(s['STATUS'], 0, 0, "Paused", 15, refresh=True)
+                else:
+                    draw_string(s['STATUS'], 0, 0, "Running", 15, refresh=True) 
+            elif qq == ord('n'):
+                nmea_paused = not nmea_paused
+                if nmea_paused: 
+                    draw_string(w['NMEA'], 0, 7, "Paused", refresh=True)
+                else:
+                    w['NMEA'].hline(0, 7, curses.ACS_HLINE, 6)
+                    w['NMEA'].refresh()
+                
+            elif qq == ord('h'):
+                draw_string(s['STATUS'], 0, 0, "Hot Started", refresh=True) 
+                send_string(self.fg, "PMTK101") 
+            elif qq == ord('w'):
+                draw_string(s['STATUS'], 0, 0, "Warm Started", refresh=True) 
+                send_string(self.fg, "PMTK102") 
+            elif qq == ord('c'):
+                draw_string(s['STATUS'], 0, 0, "Cold Started", refresh=True) 
+                send_string(self.fg, "PMTK103") 
+            elif qq == ord('r'):
+                paused = True
+                init_windows()
+                paused = False 
+ 
+def init_windows():
+    global width, gps_device
+    draw_win('TIME', "Date/Time", 3, width / 2, 0, 0)
+    draw_win('STATUS', "Status", 3, width / 2, 0, width / 2)
+    draw_string(s['STATUS'], 0, 0, "Running")
+    draw_string(s['STATUS'], 0, 15, "Device: %s" % gps_device, refresh=True)
+    draw_win('NAV', "Navigation", 5, width, 3, 0)
+    draw_win('SAT', "Satellites", 8, width, 8, 0)    
+    draw_win('NMEA', "NMEA", 10, width, 16, 0)
+    s['NMEA'].scrollok(True)
+    s['HELP'] = curses.newwin(1, width, 26, 0)
+#    draw_string(s['HELP'], 0, 1, "q: quit, p: pause, h: hot start, w: warm start, c: cold start, n: pause nmea")
+#                                 123456789012345678901234567890123456789012345678901234567890
+    draw_string(s['HELP'], 0, 1, "quit, pause, hot start, warm start, cold start, pause nmea, refresh")
+    a = curses.A_BOLD | curses.A_UNDERLINE
+    s['HELP'].chgat(0, 1, 1, a)
+    s['HELP'].chgat(0, 7, 1, a)
+    s['HELP'].chgat(0, 14, 1, a)
+    s['HELP'].chgat(0, 25, 1, a)
+    s['HELP'].chgat(0, 37, 1, a)
+    s['HELP'].chgat(0, 49, 1, a)
+    s['HELP'].chgat(0, 61, 1, a)
+    
+    s['HELP'].refresh()
+    
+
+def sigwinch_handler(n, frame):
+    paused = True
+    curses.endwin()
+    curses.initscr()
+#    y, x = getheightwidth()
+#    curses.resizeterm(y, x)
+#    width = min((80, x))
+    init_windows()
+    paused = False
+ 
+def main(stds):
+    parser = argparse.ArgumentParser(fromfile_prefix_chars='@',
+    description="Displays NMEA Data",
+    epilog="You can use '@filename' to read arguments from a file.")
+    parser.convert_arg_line_to_args = convert_arg_line_to_args
+    parser.add_argument("gps_device", metavar="<GPS_Device>", help="GPS Device")
+    args = parser.parse_args()
+    
+    signal.signal(signal.SIGWINCH, sigwinch_handler)
+
+    global paused, nmea_paused, stdscr, width, gps_device
+    global lostfix, hasfix, gotfix
+    gps_device = args.gps_device
+    lostfix = time.time()
+    hasfix = False
+    gotfix = time.time()
+    
+    stdscr = stds
+    stdscr.refresh()
+    curses.curs_set(0)
+    
+    init_windows()
+    
+    tfg = os.open(args.gps_device, os.O_RDWR)
+    params = termios.tcgetattr(tfg);
+    previous_baudrate = baudrate[params[5]];
+    tty.setraw(tfg, tty.TCSANOW)
+    os.close(tfg)
+
+    fg = serial.Serial(port=args.gps_device, timeout=5, baudrate=previous_baudrate)
+    last_sent = int(time.time())
+
+    thread = inputloop(fg)
+    thread.setDaemon(True)
+    thread.start()
+    
+    while True:
+        if not fg.isOpen or not thread.is_alive():
+            break
+        
+        try:
+            line = fg.readline()
+        except select.error:
+            pass
+        
+        if paused: continue;
+        
+        line = line.strip()
+        if len(line) == 0 or line[0] != "$":
+            continue;
+        line = line[1:-3]
+
+        if not nmea_paused:
+            y, x = s['NMEA'].getmaxyx()
+            draw_string(s['NMEA'], y-1, 0, line, x, True)
+            if len(line) < x:
+                s['NMEA'].scroll(1)
+
+        a = line.split(',')
+        stype = a[0]
+        if stype in f:
+            f[stype](a)
+
+        tm = int(time.time())
+        if tm % 10 == 0 and last_sent != tm:
+            send_string(fg, "PMTK607")
+            last_sent = tm
+      
+    if fg and fg.isOpen:
+        fg.close()
+    
+if __name__ == "__main__":
+    try:
+        sys.exit(curses.wrapper(main) or 0)
+    except KeyboardInterrupt:
+        pass
+    
