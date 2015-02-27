@@ -138,12 +138,22 @@ def process_line(fg, device, speed, line):
         process_command(fg, "-PMTK104")
         time.sleep(0.500)
         set_speed(fg, 9600)
+    elif line[0:len("eporetrieve ")] == "eporetrieve ":
+        a0 = sys.argv[0]
+        d = dirname(a0) + '/'
+        p = subprocess.Popen(d + line,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, close_fds=True, shell=True)
+        while True:
+            pline = p.stdout.readline()
+            if not pline:
+                break
+            print ">> " + pline.strip()
     elif line[0:len("epoloader ")] == "epoloader ":
         fg.close()
         a0 = sys.argv[0]
         d = dirname(a0) + '/'
         p = subprocess.Popen(d + line,
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, close_fds=True, shell=True)
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, close_fds=True, shell=True)
         while True:
             pline = p.stdout.readline()
             if not pline:
