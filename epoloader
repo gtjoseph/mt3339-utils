@@ -1,15 +1,18 @@
-#!/usr/bin/python
+#!/usr/bin/python -uO
 
-import sys
-import os
-import io
-import struct
-import time
+from threading import Thread
 import argparse
-import serial
+import io
+import os
+import struct
 import subprocess
-import tty
+import sys
 import termios
+import time
+import tty
+
+import serial
+
 
 PREAMBLE = 0x2404
 EPO_CMD = 0x02d2
@@ -55,49 +58,72 @@ def getResponse(fg, command):
 
         if b != '\x04':
             continue
-            
+
         b = fg.read(1)
         if b != '\x24':
             continue
-            
+
         length, cmd = struct.unpack("<HH", fg.read(4))
-        
+
         if cmd == command:
             return struct.unpack("<HBBH", fg.read(6))[0:2]
         else:
-            struct.unpack("<%dBBH" % (length - 9), fg.read(length-6))
-            
+            struct.unpack("<%dBBH" % (length - 9), fg.read(length - 6))
+
         limit += 1
         if limit > 10:
             break
-            
+
     return (-1, -1, -1, -1)
 
-def getNMEAResponse(fg, command):
-    limit = 0
-    while True:
-        line = fg.readline().strip()
-        if len(line) < 3:
-            continue
-        spl = line[1:-3].split(',')
-        if spl[0] == command:
-            return spl
+class rx_loop_thread(Thread):
+    def __init__(self, fg, r):
+        Thread.__init__(self)
+        self.fg = fg
+        self.result = None;
+        self.killme = False
+        self.r = r
 
-        limit += 1
-        if limit > 20:
-            break
-            
-    return ("PMTK999", "999", "999")
+    def getResult(self):
+        return self.result
+
+    def kill(self):
+        self.killme = True
+
+    def run(self):
+        self.fg.flushInput()
+        while True:
+            try:
+                for line in self.fg:
+                    if self.killme: return
+                    if len(line) < 3:
+                        continue
+                    spl = line.strip()[1:-3].split(',')
+                    if spl[0] == self.r:
+                        self.result = spl
+                        return
+            except:
+                pass
+
+def send_and_wait(fg, string, timeout, r="PMTK001"):
+    thread = rx_loop_thread(fg, r)
+    thread.setDaemon(True)
+    thread.start()
+    send_string(fg, string);
+    thread.join(timeout)
+    if thread.isAlive():
+        thread.kill()
+        return None
+    return thread.getResult()
 
 def send_string(fg, string):
-    fg.flushInput()
     fg.write("$%s*%02x\r\n" % (string, crc8(string)))
-    fg.flushOutput()
+    fg.flush()
 
 def send_speed(fg, speed, count, delay):
     speed_string = "PMTK251,%d" % speed
     send_string = "$%s*%02x\r\n" % (speed_string, crc8(speed_string))
-    i = iter(range(count,-1,-1))
+    i = iter(range(count, -1, -1))
     while next(i):
         fg.write(send_string)
         fg.flush()
@@ -130,49 +156,55 @@ def cleanup(fi, fg, device, previous_baudrate, keep):
     if fi:
         fi.close()
 
-
 def get_known_state(device, speed, previous_baudrate, keep):
 #    Make sure the unit is in NMEA mode
+    fg = serial.Serial(port=device, timeout=5)
+    tty.setraw(fg, tty.TCSANOW)
     print "Making sure the unit is in NMEA mode"
-    for xrate in baudrate:
-        rate = baudrate[xrate]
-        fg = serial.Serial(port=device, timeout=5, baudrate=rate)
-        fg.flushInput()
+    for t in baudrate:
+        rate = baudrate[t]
+        fg.baudrate = rate
         set_nmea(fg, rate)
-        fg.flushInput()
         set_nmea(fg, rate)
-        fg.flushInput()
         set_nmea(fg, rate)
-        fg.close()
-        
+    fg.flushInput()
+    fg.close()
+
     tries = 0
     while True:
 #    Get the speeds to match
         print "Making sure the speeds match"
-        for xrate in baudrate:
-            rate = baudrate[xrate]
+
+        # Blast the bnew speed at all rates.
+
+        for t in baudrate:
+            rate = baudrate[t]
             fg = serial.Serial(port=device, timeout=5, baudrate=rate)
+            tty.setraw(fg, tty.TCSANOW)
             fg.flushInput()
-            send_speed(fg, speed, 3, 0.123)
+            send_speed(fg, speed, 4, 0.100)
+            fg.flushInput()
             fg.close()
 
         fg = serial.Serial(port=device, timeout=5, baudrate=speed)
+        tty.setraw(fg, tty.TCSANOW)
+        time.sleep(1.000)
         fg.flushInput()
-        send_string(fg, "PMTK000")
-        resp = getNMEAResponse(fg, "PMTK001")
-        if resp[2] != '3':
+        # Now try to send a NoOp command
+        resp = send_and_wait(fg, "PMTK000", 5)
+        if resp is None or resp[2] != '3':
+            tty.setraw(fg, tty.TCSANOW)
             fg.close()
             print >> sys.stderr, "The GPS speed and the port speed couldn't be synchronized."
             tries += 1
             if tries < 2:
                 print "Retrying"
             else:
-                cleanup(None, None, device, previous_baudrate, keep)
                 return None
         else:
             print "GPS and port are now synchronized at %d" % speed
             return fg
-    
+
 def main():
     parser = argparse.ArgumentParser(fromfile_prefix_chars='@',
     description="Loads EPO data sets to MT3339 GPS",
@@ -181,11 +213,12 @@ def main():
     group = parser.add_argument_group(title="optional known time and location parameters")
     group.add_argument("-t", "--time", dest="time_string", help="Current UTC or UTC from host", metavar="yyyy,mm,dd,hh,mm,ss | - ")
     group.add_argument("-l", "--location", dest="location_string", help="Current location specified in decimal degrees and meters", metavar="lat.dddddd,lon.dddddd,alt")
-    
-    parser.add_argument("-s", "--speed", type=int, default=115200, dest="speed", help="Interface speed", choices=[4800,9600,19200,38400,57600,115200])
+
+    parser.add_argument("-s", "--speed", type=int, default=115200, dest="speed", help="Interface speed", choices=[4800, 9600, 19200, 38400, 57600, 115200])
     parser.add_argument("-k", "--keep-new-speed", dest="keep_new_speed", default=False, action="store_true", help="Don't restore the old speed on exit")
     parser.add_argument("-c", "--clear", dest="clear_epo", default=False, action="store_true", help="Clears the existing EPO data from the unit")
-    
+    parser.add_argument("-n", "--no-init", dest="no_init", default=False, action="store_true", help="Skips the initialization")
+
     parser.add_argument("input_file", metavar="<EPO_File>", help="EPO File or '-' to just set the known parameters")
     parser.add_argument("output_device", metavar="<gps_device>", help="GPS serial device such as '/dev/ttyUSB0'")
 
@@ -199,7 +232,7 @@ def main():
         except:
             print sys.exc_info()[1]
             return 1
-            
+
         header = fi.read(75)
         fi.close()
         if header[0:3] == header[60:63]:
@@ -215,7 +248,7 @@ def main():
         else:
             print >> sys.stderr, "%s is not a valid EPO file." % args.input_file
             return 1
-        
+
         if file_size % EPO_SET_SIZE != 0:
             print >> sys.stderr, "The size of %s is not an even multiple of EPO_SET_SIZE(%d).  It may be corrupted." % (args.input_file, EPO_SET_SIZE)
             return 1
@@ -230,6 +263,7 @@ def main():
         print >> sys.stderr, "ERROR: Device %s is open by PID: %s  PROG: %s  USER: %s" % (args.output_device, lines[0][1:], lines[1][1:], lines[2][1:])
         return 1;
 
+    '''
     try:
         tfg = os.open(args.output_device, os.O_RDWR)
     except:
@@ -240,10 +274,15 @@ def main():
     previous_baudrate = baudrate[params[5]];
     tty.setraw(tfg, tty.TCSANOW)
     os.close(tfg)
-
+    '''
+    previous_baudrate = 115200
     print "Current port speed: %d" % previous_baudrate
 
-    fg = get_known_state(args.output_device, args.speed, previous_baudrate, args.keep_new_speed)
+    if args.no_init:
+        fg = serial.Serial(args.output_device, timeout=5, baudrate=args.speed)
+    else:
+        fg = get_known_state(args.output_device, args.speed, previous_baudrate, args.keep_new_speed)
+
     if fg is None:
         return 1
 
@@ -257,29 +296,26 @@ def main():
             time_string = args.time_string
 
         print "Setting known values: %s  %s" % (args.location_string, time_string)
-        send_string(fg, "PMTK740,%s" % time_string)
-        resp = getNMEAResponse(fg, "PMTK001")
-        if resp[2] != '3':
-            print  >> sys.stderr, "ERROR: Unable to set time."
+        resp = send_and_wait(fg, "PMTK740,%s" % time_string, 5)
+        if resp is None or resp[2] != '3':
+            print >> sys.stderr, "ERROR: Unable to set time."
             cleanup(fi, fg, args.output_device, previous_baudrate, args.keep_new_speed)
             return 1
-            
-        send_string(fg, "PMTK741,%s,%s" % (args.location_string, time_string))
-        resp = getNMEAResponse(fg, "PMTK001")
-        if resp[2] != '3':
-            print  >> sys.stderr, "ERROR: Unable to set location."
+
+        resp = send_and_wait(fg, "PMTK741,%s,%s" % (args.location_string, time_string), 5)
+        if resp is None or resp[2] != '3':
+            print >> sys.stderr, "ERROR: Unable to set location."
             cleanup(fi, fg, args.output_device, previous_baudrate, args.keep_new_speed)
             return 1
 
     if args.clear_epo:
         print "Clearing existing EPO data"
-        send_string(fg, "PMTK127")
-        resp = getNMEAResponse(fg, "PMTK001")
-        if resp[2] != '3':
-            print  >> sys.stderr, "ERROR: Unable to clear existing EPO data."
+        resp = send_and_wait(fg, "PMTK127", 5)
+        if resp is None or resp[2] != '3':
+            print >> sys.stderr, "ERROR: Unable to clear existing EPO data."
             cleanup(fi, fg, args.output_device, previous_baudrate, args.keep_new_speed)
             return 1
-        
+
     if fi is None:
         cleanup(fi, fg, args.output_device, previous_baudrate, args.keep_new_speed)
         return 0
@@ -287,7 +323,7 @@ def main():
     print "Setting binary mode, speed: %d" % args.speed
     send_string(fg, "PMTK253,1,%d" % args.speed)
     time.sleep(0.500)
-    
+
     seq = 0;
     total_read = 0;
     failed = False
@@ -300,18 +336,19 @@ def main():
             struct.pack_into("<HHHH", buf, 0, PREAMBLE, FRAME_LENGTH, EPO_CMD, seq)
             data_start = 8
             if lseq == 10:
-                data_end = data_start + SAT_SET_SIZE*2
+                data_end = data_start + SAT_SET_SIZE * 2
             else:
-                data_end = data_start + SAT_SET_SIZE*3
+                data_end = data_start + SAT_SET_SIZE * 3
 
-            fb = memoryview(buf)
-            br = fi.readinto(fb[data_start:data_end])
-            total_read += br
+            red = fi.read(data_end - data_start)
+            total_read += len(red)
+            buf[data_start:data_end] = red
+
             struct.pack_into("<BH", buf, FRAME_LENGTH - 3, crc8(buf[2: FRAME_LENGTH - 3]), EOW)
 
             if lseq == 0:
-                epo_sets +=1
-                set_start_time = struct.unpack("<i", buf[8:11] + '\0')[0]
+                epo_sets += 1
+                set_start_time = struct.unpack("<I", red[0:3] + '\0')[0]
                 print "Sending set %4d.  Valid from %s UTC" % (epo_sets, Convert2UTC(set_start_time))
                 if seq == 0:
                     start = set_start_time
@@ -334,7 +371,8 @@ def main():
 
     fi.close()
     if not failed:
-        end = struct.unpack("<i", buf[8:11]+'\0')[0]
+#        end = struct.unpack_from("<i", buf, 8)[0]
+        end = set_start_time
         buf = bytearray('\0' * FRAME_LENGTH)
         struct.pack_into("<HHHH", buf, 0, PREAMBLE, FRAME_LENGTH, EPO_CMD, 0xffff)
         struct.pack_into("<BH", buf, FRAME_LENGTH - 3, crc8(buf[2: FRAME_LENGTH - 3]), EOW)
@@ -346,13 +384,18 @@ def main():
         else:
             print "%4d sets sent.  Valid from %s to %s UTC" % (epo_sets,
             Convert2UTC(start),
-            Convert2UTC(end+6))
-    
+            Convert2UTC(end + 6))
+
     set_nmea(fg, args.speed)
     getResponse(fg, 1)
-    send_string(fg, "PMTK607")
-    resp = getNMEAResponse(fg, "PMTK707")
+    time.sleep(1.00)
+
+    resp = send_and_wait(fg, "PMTK607", 5, "PMTK707")
     cleanup(fi, fg, args.output_device, previous_baudrate, args.keep_new_speed)
+
+    if resp is None:
+        print >> sys.stderr, "ERROR: EPO in NVRAM couldn't be verified"
+        return 1
 
     vstart = (int(resp[2]) * 168 + int(resp[3]) / 3600)
     vend = (int(resp[4]) * 168 + int(resp[5]) / 3600)
@@ -361,11 +404,11 @@ def main():
         return 0
     else:
         print >> sys.stderr, "ERROR: EPO in NVRAM doesnt match file"
-        print >> sys.stderr, "  In NVRAM: %s to %s UTC" % (Convert2UTC(vstart), Convert2UTC(vend))     
+        print >> sys.stderr, "  In NVRAM: %s to %s UTC" % (Convert2UTC(vstart), Convert2UTC(vend))
         return 1
-        
+
 if __name__ == "__main__":
-    
+
     sys.exit(main() or 0)
-    
+
 
