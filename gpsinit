@@ -1,22 +1,25 @@
 #!/usr/bin/python
 
 
-import sys
+from os.path import dirname
+from threading import Thread
+import argparse
 import io
 import struct
-import time
-import argparse
-import serial
 import subprocess
-from os.path import dirname
+import sys
 import termios
+import time
 import tty
+
+import serial
+
 
 PREAMBLE = 0x2404
 EPO_CMD = 0x02d2
 EOW = 0x0a0d
 UART_CMD = 253
-DEFAULT_COMMAND="PMTK314,1,1,1,1,5,5,0,0,0,0,0,0,0,0,0,0,0,1,0"
+DEFAULT_COMMAND = "PMTK314,1,1,1,1,5,5,0,0,0,0,0,0,0,0,0,0,0,1,0"
 
 baudrate = {
     termios.B4800: 4800,
@@ -42,49 +45,73 @@ def getResponse(fg, command):
 
         if b != '\x04':
             continue
-            
+
         b = fg.read(1)
         if b != '\x24':
             continue
-            
+
         length, cmd = struct.unpack("<HH", fg.read(4))
-        
+
         if cmd == command:
             return struct.unpack("<HBBH", fg.read(6))[0:2]
         else:
-            struct.unpack("<%dBBH" % (length - 9), fg.read(length-6))
-            
+            struct.unpack("<%dBBH" % (length - 9), fg.read(length - 6))
+
         limit += 1
         if limit > 10:
             break
-            
+
     return (-1, -1, -1, -1)
 
-def getNMEAResponse(fg, command):
-    limit = 0
-    while True:
-        line = fg.readline().strip()
-        if len(line) < 3:
-            continue
-        spl = line[1:-3].split(',')
-        if spl[0] == command:
-            return spl
 
-        limit += 1
-        if limit > 20:
-            break
-            
-    return ("PMTK999", "999", "999")
+class rx_loop_thread(Thread):
+    def __init__(self, fg, r):
+        Thread.__init__(self)
+        self.fg = fg
+        self.result = None;
+        self.killme = False
+        self.r = r
+
+    def getResult(self):
+        return self.result
+
+    def kill(self):
+        self.killme = True
+
+    def run(self):
+        self.fg.flushInput()
+        while True:
+            try:
+                for line in self.fg:
+                    if self.killme: return
+                    if len(line) < 3:
+                        continue
+                    spl = line.strip()[1:-3].split(',')
+                    if spl[0] == self.r:
+                        self.result = spl
+                        return
+            except:
+                pass
+
+def send_and_wait(fg, string, timeout):
+    thread = rx_loop_thread(fg)
+    thread.setDaemon(True)
+    thread.start()
+    send_string(fg, string);
+    thread.join(timeout)
+    if thread.isAlive():
+        thread.kill()
+        return None
+    return thread.getResult()
 
 def send_string(fg, string):
-    fg.flushInput()
     fg.write("$%s*%02x\r\n" % (string, crc8(string)))
-    fg.flushOutput()
+    fg.flush()
 
 def send_speed(fg, speed, count, delay):
     speed_string = "PMTK251,%d" % speed
     send_string = "$%s*%02x\r\n" % (speed_string, crc8(speed_string))
-    i = iter(range(count,-1,-1))
+    i = iter(range(count, -1, -1))
     while next(i):
         fg.write(send_string)
         fg.flush()
@@ -104,8 +131,7 @@ def set_nmea(fg, rate):
     fg.flush()
 
 def set_speed(fg, speed):
-    send_speed(fg, speed, 3, 0.113)
-    time.sleep(0.245)
+    send_speed(fg, speed, 4, 0.100)
     fg.baudrate = speed
 
 def process_command(fg, line):
@@ -114,9 +140,8 @@ def process_command(fg, line):
         send_string(fg, line[1:])
         time.sleep(0.250)
     else:
-        send_string(fg, line)
-        resp = getNMEAResponse(fg, "PMTK001")
-        if resp[2] != '3':
+        resp = send_and_wait(fg, line, 5)
+        if resp is None or resp[2] != '3':
             print >> sys.stderr, "Failed to get ACK."
 
 def process_line(fg, device, speed, line):
@@ -164,7 +189,54 @@ def process_line(fg, device, speed, line):
         process_command(fg, line)
     return fg
 
+def get_known_state(device, speed, previous_baudrate, keep):
+#    Make sure the unit is in NMEA mode
+    fg = serial.Serial(port=device, timeout=5)
+    tty.setraw(fg, tty.TCSANOW)
+    print "Making sure the unit is in NMEA mode"
+    for t in baudrate:
+        rate = baudrate[t]
+        fg.baudrate = rate
+        set_nmea(fg, rate)
+        set_nmea(fg, rate)
+        set_nmea(fg, rate)
+    fg.flushInput()
+    fg.close()
 
+    tries = 0
+    while True:
+#    Get the speeds to match
+        print "Making sure the speeds match"
+
+        # Blast the bnew speed at all rates.
+
+        for t in baudrate:
+            rate = baudrate[t]
+            fg = serial.Serial(port=device, timeout=5, baudrate=rate)
+            tty.setraw(fg, tty.TCSANOW)
+            fg.flushInput()
+            send_speed(fg, speed, 4, 0.100)
+            fg.flushInput()
+            fg.close()
+
+        fg = serial.Serial(port=device, timeout=5, baudrate=speed)
+        tty.setraw(fg, tty.TCSANOW)
+        time.sleep(1.000)
+        fg.flushInput()
+        # Now try to send a NoOp command
+        resp = send_and_wait(fg, "PMTK000", 5)
+        if resp is None or resp[2] != '3':
+            tty.setraw(fg, tty.TCSANOW)
+            fg.close()
+            print >> sys.stderr, "The GPS speed and the port speed couldn't be synchronized."
+            tries += 1
+            if tries < 2:
+                print "Retrying"
+            else:
+                return None
+        else:
+            print "GPS and port are now synchronized at %d" % speed
+            return fg
 
 def main():
     parser = argparse.ArgumentParser(fromfile_prefix_chars='@',
@@ -172,10 +244,10 @@ def main():
     epilog="You can use '@filename' to read arguments from a file.")
     group = parser.add_mutually_exclusive_group()
     parser.convert_arg_line_to_args = convert_arg_line_to_args
-    parser.add_argument("-s", "--speed", type=int, default=115200, dest="speed", help="Interface speed", choices=[4800,9600,19200,38400,57600,115200])
+    parser.add_argument("-s", "--speed", type=int, default=115200, dest="speed", help="Interface speed", choices=[4800, 9600, 19200, 38400, 57600, 115200])
     group.add_argument("-i", "--init_command", metavar="<init_command>", dest="init_command", help="A single initialization command such as 'PMTK101'")
     group.add_argument("-f", "--command_file", metavar="<command_file>", dest="command_file", help="A file containing commands used to initialize the GPS")
-    
+
     parser.add_argument("output_device", metavar="<gps_device>", help="GPS serial device such as '/dev/ttyUSB0'")
 
     args = parser.parse_args()
@@ -187,50 +259,9 @@ def main():
         lines = o.split('\n')
         print >> sys.stderr, "ERROR: Device %s is open by PID: %s  PROG: %s  USER: %s" % (args.output_device, lines[0][1:], lines[1][1:], lines[2][1:])
         return 1;
-    
-#    Make sure the unit is in NMEA mode
-    print "Making sure the unit is in NMEA mode"
-    for xrate in baudrate:
-        rate = baudrate[xrate]
-        fg = serial.Serial(port=args.output_device, timeout=5, baudrate=rate)
-        tty.setraw(fg, tty.TCSANOW)
-        fg.flushInput()
-        set_nmea(fg, rate)
-        fg.flushInput()
-        set_nmea(fg, rate)
-        fg.flushInput()
-        set_nmea(fg, rate)
-        fg.close()
 
-    tries = 0
-    while True:
-#    Get the speeds to match
-        print "Making sure the speeds match"
-        for xrate in baudrate:
-            rate = baudrate[xrate]
-            fg = serial.Serial(port=args.output_device, timeout=5, baudrate=rate)
-            tty.setraw(fg, tty.TCSANOW)
-            fg.flushInput()
-            send_speed(fg, args.speed, 3, 0.123)
-            fg.close()
-
-        fg = serial.Serial(port=args.output_device, timeout=5, baudrate=args.speed)
-        tty.setraw(fg, tty.TCSANOW)
-        fg.flushInput()
-        send_string(fg, "PMTK000")
-        resp = getNMEAResponse(fg, "PMTK001")
-        if resp[2] != '3':
-            print >> sys.stderr, "The GPS speed and the port speed couldn't be synchronized."
-            tries += 1
-            if tries < 2:
-                print "Retrying"
-            else:
-                tty.setraw(fg, tty.TCSANOW)
-                fg.close()
-                return 1
-        else:
-            print "GPS and port are now synchronized at %d" % args.speed
-            break
+    fg = get_known_state(args.output_device, args.speed, None, False)
+    if fg is None: return 1
 
     if args.command_file:
         fi = io.open(args.command_file, mode="r")
@@ -247,17 +278,17 @@ def main():
             line = line.replace("${DEVICE}", args.output_device).replace("${SPEED}", str(args.speed))
             print line
             fg = process_line(fg, args.output_device, args.speed, line)
-            
+
         fi.close()
         print "Done"
     elif args.init_command:
         fg = process_line(fg, args.output_device, args.speed, args.init_command)
     else:
         fg = process_line(fg, args.output_device, args.speed, DEFAULT_COMMAND)
-    
+
     tty.setraw(fg, tty.TCSANOW)
     fg.close()
-        
+
 if __name__ == "__main__":
     sys.exit(main() or 0)
 

@@ -101,6 +101,7 @@ optional arguments:
                         Interface speed
   -k, --keep-new-speed  Don't restore the old speed on exit
   -c, --clear           Clears the existing EPO data from the unit
+  -n, --no-init         The unit is already in the correct state
 
 optional known time and location parameters:
   -t yyyy,mm,dd,hh,mm,ss | - , --time yyyy,mm,dd,hh,mm,ss | - 
