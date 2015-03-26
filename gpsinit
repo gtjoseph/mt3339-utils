@@ -93,8 +93,8 @@ class rx_loop_thread(Thread):
             except:
                 pass
 
-def send_and_wait(fg, string, timeout):
-    thread = rx_loop_thread(fg)
+def send_and_wait(fg, string, timeout, r="PMTK001"):
+    thread = rx_loop_thread(fg, r)
     thread.setDaemon(True)
     thread.start()
     send_string(fg, string);
