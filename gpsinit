@@ -5,6 +5,7 @@ from os.path import dirname
 from threading import Thread
 import argparse
 import io
+import os
 import struct
 import subprocess
 import sys
@@ -93,16 +94,23 @@ class rx_loop_thread(Thread):
             except:
                 pass
 
-def send_and_wait(fg, string, timeout, r="PMTK001"):
-    thread = rx_loop_thread(fg, r)
-    thread.setDaemon(True)
-    thread.start()
-    send_string(fg, string);
-    thread.join(timeout)
-    if thread.isAlive():
-        thread.kill()
-        return None
-    return thread.getResult()
+def send_and_wait(fg, string, timeout, r="PMTK001", retries=0):
+    resp = None
+    count = 0
+
+    while resp == None and count <= retries:
+        thread = rx_loop_thread(fg, r)
+        thread.setDaemon(True)
+        thread.start()
+        fg.flushOutput()
+        send_string(fg, string);
+        thread.join(timeout)
+        if thread.isAlive():
+            thread.kill()
+            count += 1
+            continue
+        return thread.getResult()
+    return resp
 
 def send_string(fg, string):
     fg.write("$%s*%02x\r\n" % (string, crc8(string)))
@@ -116,6 +124,43 @@ def send_speed(fg, speed, count, delay):
         fg.write(send_string)
         fg.flush()
         time.sleep(delay)
+
+def setclock(fg):
+    uid = os.geteuid()
+    if uid != 0:
+        print "set_system_clock must be run as root"
+        return -1
+
+    print "Setting system clock"
+
+    resp = send_and_wait(fg, "PMTK414", 2, r="PMTK514", retries=2)
+    if not resp or len(resp) < 18:
+        print "Failed to get current NMEA sentence info"
+        return -1
+
+    resp[18] = '1'
+    resp = send_and_wait(fg, ','.join(resp), 3, retries=2)
+    if not resp:
+        print "Failed to set NMEA sentence info (may still work)"
+
+    resp = send_and_wait(fg, "", 3, r="GPZDA", retries=2)
+    if not resp:
+        print "Failed to get date/time"
+        return -1
+
+    tt = (int(resp[4]), int(resp[3]), int(resp[2]), int(resp[1][0:2]), int(resp[1][2:4]), int(resp[1][4:6]), 0)
+    tts = "%4d-%02d-%02d %02d:%02d:%02d" % tt[:6]
+
+    if tt[0] < 2015:
+        print "The GPS time %s is not valid." % tts
+        return -1
+
+    rc = subprocess.call(['date', '+%Y-%m-%d %H-%M-%S', '-u', '-s',  '%s' % tts])
+    if rc != 0:
+        print "Failed to set date/time: RC %d.  Are you root?" % rc
+        return -1
+
+    print "Set system time to %s UTC" % tts
 
 def convert_arg_line_to_args(arg_line):
     for arg in arg_line.split():
@@ -145,6 +190,7 @@ def process_command(fg, line):
             print >> sys.stderr, "Failed to get ACK."
 
 def process_line(fg, device, speed, line):
+    rc = 0
     if line[0:len("setspeed ")] == "setspeed ":
         newspeed = int(line[len("setspeed "):].strip())
         print "Setting new speed: %d" % newspeed
@@ -163,6 +209,8 @@ def process_line(fg, device, speed, line):
         process_command(fg, "-PMTK104")
         time.sleep(0.500)
         set_speed(fg, 9600)
+    elif line == "set_system_clock":
+        rc = setclock(fg)
     elif line[0:len("eporetrieve ")] == "eporetrieve ":
         a0 = sys.argv[0]
         d = dirname(a0) + '/'
@@ -187,9 +235,22 @@ def process_line(fg, device, speed, line):
         fg = serial.Serial(port=device, timeout=5, baudrate=speed)
     else:
         process_command(fg, line)
-    return fg
+    return (rc, fg)
 
 def get_known_state(device, speed, previous_baudrate, keep):
+
+    fg = serial.Serial(port=device, timeout=5, baudrate=speed)
+    tty.setraw(fg, tty.TCSANOW)
+    time.sleep(1.000)
+    fg.flushInput()
+    resp = send_and_wait(fg, "PMTK000", 2, retries=1)
+    if resp and resp[2] == '3':
+        print "GPS and port are now synchronized at %d" % speed
+        return fg
+
+    fg.close()
+    time.sleep(1.000)
+
 #    Make sure the unit is in NMEA mode
     fg = serial.Serial(port=device, timeout=5)
     tty.setraw(fg, tty.TCSANOW)
@@ -224,7 +285,7 @@ def get_known_state(device, speed, previous_baudrate, keep):
         time.sleep(1.000)
         fg.flushInput()
         # Now try to send a NoOp command
-        resp = send_and_wait(fg, "PMTK000", 5)
+        resp = send_and_wait(fg, "PMTK000", 2, retries=1)
         if resp is None or resp[2] != '3':
             tty.setraw(fg, tty.TCSANOW)
             fg.close()
@@ -247,6 +308,7 @@ def main():
     parser.add_argument("-s", "--speed", type=int, default=115200, dest="speed", help="Interface speed", choices=[4800, 9600, 19200, 38400, 57600, 115200])
     group.add_argument("-i", "--init_command", metavar="<init_command>", dest="init_command", help="A single initialization command such as 'PMTK101'")
     group.add_argument("-f", "--command_file", metavar="<command_file>", dest="command_file", help="A file containing commands used to initialize the GPS")
+    group.add_argument("-n", "--no-init", dest="no_init", default=False, action="store_true", help="Skip the initialization, just run the commands")
 
     parser.add_argument("output_device", metavar="<gps_device>", help="GPS serial device such as '/dev/ttyUSB0'")
 
@@ -260,9 +322,14 @@ def main():
         print >> sys.stderr, "ERROR: Device %s is open by PID: %s  PROG: %s  USER: %s" % (args.output_device, lines[0][1:], lines[1][1:], lines[2][1:])
         return 1;
 
-    fg = get_known_state(args.output_device, args.speed, None, False)
+    if args.no_init:
+        fg = serial.Serial(args.output_device, timeout=5, baudrate=args.speed)
+    else:
+        fg = get_known_state(args.output_device, args.speed, None, False)
+
     if fg is None: return 1
 
+    rc = 0
     if args.command_file:
         fi = io.open(args.command_file, mode="r")
         print "Processing commands..."
@@ -277,17 +344,18 @@ def main():
                 continue
             line = line.replace("${DEVICE}", args.output_device).replace("${SPEED}", str(args.speed))
             print line
-            fg = process_line(fg, args.output_device, args.speed, line)
+            (rc, fg) = process_line(fg, args.output_device, args.speed, line)
 
         fi.close()
         print "Done"
     elif args.init_command:
-        fg = process_line(fg, args.output_device, args.speed, args.init_command)
+        (rc, fg) = process_line(fg, args.output_device, args.speed, args.init_command)
     else:
-        fg = process_line(fg, args.output_device, args.speed, DEFAULT_COMMAND)
+        (rc, fg) = process_line(fg, args.output_device, args.speed, DEFAULT_COMMAND)
 
     tty.setraw(fg, tty.TCSANOW)
     fg.close()
+    return rc
 
 if __name__ == "__main__":
     sys.exit(main() or 0)
