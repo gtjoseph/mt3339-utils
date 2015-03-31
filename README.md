@@ -272,6 +272,7 @@ sets NMEA sentences and frequency and finally does an epo load.
 #  The following commands are recognized...
 #
 #  sleep <seconds>				Sleep for n.nnn seconds
+#  set_system_clock				Gets the date/time from the GPS unit and sets the system clock
 #  setspeed <newspeed>			Set new port and unit speed to <newspeed>
 #  epoloader <epoloader_args>   Run epoloader
 #  factory_reset				Clear system/user configurations then cold start
@@ -336,8 +337,5 @@ you and writes the result to the GPS device.
 gpsstatus <gps_device>
 ```	
 This shell script just displays the output of the GPS unit and calculates the time to first fix.
-
-	
-
 
 

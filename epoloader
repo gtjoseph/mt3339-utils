@@ -105,16 +105,23 @@ class rx_loop_thread(Thread):
             except:
                 pass
 
-def send_and_wait(fg, string, timeout, r="PMTK001"):
-    thread = rx_loop_thread(fg, r)
-    thread.setDaemon(True)
-    thread.start()
-    send_string(fg, string);
-    thread.join(timeout)
-    if thread.isAlive():
-        thread.kill()
-        return None
-    return thread.getResult()
+def send_and_wait(fg, string, timeout, r="PMTK001", retries=0):
+    resp = None
+    count = 0
+
+    while resp == None and count <= retries:
+        thread = rx_loop_thread(fg, r)
+        thread.setDaemon(True)
+        thread.start()
+        send_string(fg, string);
+        thread.join(timeout)
+        if thread.isAlive():
+            thread.kill()
+            count += 1
+            continue
+        return thread.getResult()
+    return resp
+
 
 def send_string(fg, string):
     fg.write("$%s*%02x\r\n" % (string, crc8(string)))
@@ -157,6 +164,19 @@ def cleanup(fi, fg, device, previous_baudrate, keep):
         fi.close()
 
 def get_known_state(device, speed, previous_baudrate, keep):
+
+    fg = serial.Serial(port=device, timeout=5, baudrate=speed)
+    tty.setraw(fg, tty.TCSANOW)
+    time.sleep(1.000)
+    fg.flushInput()
+    resp = send_and_wait(fg, "PMTK000", 2, retries=1)
+    if resp and resp[2] == '3':
+        print "GPS and port are now synchronized at %d" % speed
+        return fg
+
+    fg.close()
+    time.sleep(1.000)
+
 #    Make sure the unit is in NMEA mode
     fg = serial.Serial(port=device, timeout=5)
     tty.setraw(fg, tty.TCSANOW)
@@ -191,7 +211,7 @@ def get_known_state(device, speed, previous_baudrate, keep):
         time.sleep(1.000)
         fg.flushInput()
         # Now try to send a NoOp command
-        resp = send_and_wait(fg, "PMTK000", 5)
+        resp = send_and_wait(fg, "PMTK000", 2, retries=1)
         if resp is None or resp[2] != '3':
             tty.setraw(fg, tty.TCSANOW)
             fg.close()
@@ -263,7 +283,6 @@ def main():
         print >> sys.stderr, "ERROR: Device %s is open by PID: %s  PROG: %s  USER: %s" % (args.output_device, lines[0][1:], lines[1][1:], lines[2][1:])
         return 1;
 
-    '''
     try:
         tfg = os.open(args.output_device, os.O_RDWR)
     except:
@@ -274,8 +293,7 @@ def main():
     previous_baudrate = baudrate[params[5]];
     tty.setraw(tfg, tty.TCSANOW)
     os.close(tfg)
-    '''
-    previous_baudrate = 115200
+
     print "Current port speed: %d" % previous_baudrate
 
     if args.no_init:
@@ -296,13 +314,13 @@ def main():
             time_string = args.time_string
 
         print "Setting known values: %s  %s" % (args.location_string, time_string)
-        resp = send_and_wait(fg, "PMTK740,%s" % time_string, 5)
+        resp = send_and_wait(fg, "PMTK740,%s" % time_string, 2, retries=1)
         if resp is None or resp[2] != '3':
             print >> sys.stderr, "ERROR: Unable to set time."
             cleanup(fi, fg, args.output_device, previous_baudrate, args.keep_new_speed)
             return 1
 
-        resp = send_and_wait(fg, "PMTK741,%s,%s" % (args.location_string, time_string), 5)
+        resp = send_and_wait(fg, "PMTK741,%s,%s" % (args.location_string, time_string), 2, retries=1)
         if resp is None or resp[2] != '3':
             print >> sys.stderr, "ERROR: Unable to set location."
             cleanup(fi, fg, args.output_device, previous_baudrate, args.keep_new_speed)
@@ -310,7 +328,7 @@ def main():
 
     if args.clear_epo:
         print "Clearing existing EPO data"
-        resp = send_and_wait(fg, "PMTK127", 5)
+        resp = send_and_wait(fg, "PMTK127", 2, retries=1)
         if resp is None or resp[2] != '3':
             print >> sys.stderr, "ERROR: Unable to clear existing EPO data."
             cleanup(fi, fg, args.output_device, previous_baudrate, args.keep_new_speed)
@@ -371,7 +389,6 @@ def main():
 
     fi.close()
     if not failed:
-#        end = struct.unpack_from("<i", buf, 8)[0]
         end = set_start_time
         buf = bytearray('\0' * FRAME_LENGTH)
         struct.pack_into("<HHHH", buf, 0, PREAMBLE, FRAME_LENGTH, EPO_CMD, 0xffff)
@@ -390,7 +407,7 @@ def main():
     getResponse(fg, 1)
     time.sleep(1.00)
 
-    resp = send_and_wait(fg, "PMTK607", 5, "PMTK707")
+    resp = send_and_wait(fg, "PMTK607", 2, "PMTK707", retries=1)
     cleanup(fi, fg, args.output_device, previous_baudrate, args.keep_new_speed)
 
     if resp is None:
