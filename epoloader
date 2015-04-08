@@ -164,57 +164,39 @@ def cleanup(fi, fg, device, previous_baudrate, keep):
         fi.close()
 
 def get_known_state(device, speed, previous_baudrate, keep):
-
     fg = serial.Serial(port=device, timeout=5, baudrate=speed)
     tty.setraw(fg, tty.TCSANOW)
-    time.sleep(1.000)
     fg.flushInput()
-    resp = send_and_wait(fg, "PMTK000", 2, retries=1)
+    resp = send_and_wait(fg, "PMTK000", 0.5, retries=1)
     if resp and resp[2] == '3':
         print "GPS and port are now synchronized at %d" % speed
         return fg
 
-    fg.close()
-    time.sleep(1.000)
-
 #    Make sure the unit is in NMEA mode
-    fg = serial.Serial(port=device, timeout=5)
-    tty.setraw(fg, tty.TCSANOW)
     print "Making sure the unit is in NMEA mode"
     for t in baudrate:
         rate = baudrate[t]
         fg.baudrate = rate
         set_nmea(fg, rate)
         set_nmea(fg, rate)
-        set_nmea(fg, rate)
     fg.flushInput()
-    fg.close()
-
+    fg.flushOutput()
+    time.sleep(0.500)
     tries = 0
     while True:
-#    Get the speeds to match
         print "Making sure the speeds match"
 
-        # Blast the bnew speed at all rates.
-
         for t in baudrate:
-            rate = baudrate[t]
-            fg = serial.Serial(port=device, timeout=5, baudrate=rate)
-            tty.setraw(fg, tty.TCSANOW)
-            fg.flushInput()
-            send_speed(fg, speed, 4, 0.100)
-            fg.flushInput()
-            fg.close()
+            fg.baudrate = baudrate[t]
+            send_speed(fg, speed, 1, 0.100)
+            fg.flush()
 
-        fg = serial.Serial(port=device, timeout=5, baudrate=speed)
-        tty.setraw(fg, tty.TCSANOW)
-        time.sleep(1.000)
+        fg.baudrate = speed
+        time.sleep(0.250)
         fg.flushInput()
         # Now try to send a NoOp command
-        resp = send_and_wait(fg, "PMTK000", 2, retries=1)
+        resp = send_and_wait(fg, "PMTK000", 0.50, retries=1)
         if resp is None or resp[2] != '3':
-            tty.setraw(fg, tty.TCSANOW)
-            fg.close()
             print >> sys.stderr, "The GPS speed and the port speed couldn't be synchronized."
             tries += 1
             if tries < 2:
