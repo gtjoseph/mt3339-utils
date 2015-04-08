@@ -1,10 +1,18 @@
 #!/bin/bash
 
-EPO=${1-MTK14.EPO}
-file=${2-$EPO}
+EPO="EPO.DAT"
+MD5=${EPO/DAT/MD5}
+
+file="/tmp/$EPO"
+md5="/tmp/$MD5"
 
 if [ -e $file ] ; then
 	mv $file $file.last
 fi
 
-wget -O${file} ftp://gtopagpsenduser01:enduser080807@ftp.gtop-tech.com/${EPO}
+wget -q -O${file} http://epodownload.mediatek.com/${EPO}
+wget -q -O${md5} http://epodownload.mediatek.com/${MD5}
+
+md="$(cut -b1-32 ${md5}) ${file}"
+echo $md | md5sum --quiet -c || { echo "EPO.DAT checkdum failed" ; exit 1 ; }
+echo "EPO data saved to $file"
