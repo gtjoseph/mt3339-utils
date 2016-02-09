@@ -7,4 +7,4 @@ if [ -e $file ] ; then
 	mv $file $file.last
 fi
 
-wget -O${file} ftp://gtopagpsenduser01:enduser080807@125.227.104.212/${EPO}
+wget -O${file} ftp://gtopagpsenduser01:enduser080807@ftp.gtop-tech.com/${EPO}
