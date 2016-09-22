@@ -3,7 +3,7 @@
 string=${1:?You must supply a string and a device}
 
 device=${2:?You must supply a device}
-if [ ! -c $device ] ; then
+if [ ! -c "$device" ] ; then
 	echo "Device $device doesn't exist or isn't a character device."
 	exit 1;
 fi
@@ -16,5 +16,5 @@ for i in `seq 0 ${len}` ; do
 	crc=$(( crc  ^ $c ))
 done
 
-stdbuf -o0 printf "\$%s*%02x\r\n" ${1} ${crc} > $device
+stdbuf -o0 printf "\$%s*%02x\r\n" "${1}" "${crc}" > "$device"
 
