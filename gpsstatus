@@ -28,7 +28,7 @@ HOURS_PER_WEEK = 168
 
 locale.setlocale(locale.LC_ALL, '')
 code = locale.getpreferredencoding()
-degree = unichr(0xb0).encode(code)
+degree = chr(0xb0).encode(code)
 
 ex_string = None
 width = 80
@@ -136,12 +136,12 @@ def format_dms(dddmm, direction):
     s = ll.split(dddmm)
     if len(s) < 3:
         return " " * 17
-    return "%3s%s %2s' %05.2f\" %s" % \
-        (s[1], unichr(0xb0).encode(code), s[2], float(s[3]) * 60.0, direction)
+    return "%3s%c %2s' %05.2f\" %s" % \
+        (s[1], 0xb0, s[2], float(s[3]) * 60.0, direction)
 
 def format_heading(heading, ref):
     try:
-        return "%3d%s%s" % (math.floor(float(heading)), unichr(0xb0).encode(code), ref)
+        return "%3d%s%s" % (math.floor(float(heading)), chr(0xb0).encode(code), ref)
     except:
         return "     "
 
@@ -163,7 +163,7 @@ def draw_string(win, row, col, st, erase=-1):
 def draw_win(wid, name, rows, cols, row, col):
     if wid in w: del w[wid]
     if wid in s: del s[wid]
-    w[wid] = curses.newwin(rows, cols, row, col)
+    w[wid] = curses.newwin(int(rows), int(cols), int(row), int(col))
     p[wid] = panel.new_panel(w[wid])
     w[wid].border()
     w[wid].addstr(0, 2, name)
@@ -209,8 +209,8 @@ draws['TIME'] = draw_time
 def draw_sat():
     win = s['SAT']
     draw_string(win, 0, 0, "  Sat:")
-    draw_string(win, 1, 0, "Elev%s:" % degree)
-    draw_string(win, 2, 0, "  Az%s:" % degree)
+    draw_string(win, 1, 0, "Elev\xb0:")
+    draw_string(win, 2, 0, "  Az\xb0:")
     draw_string(win, 3, 0, "  SNR:")
 
     draw_string(win, 5, 40, "Fix Type:")
@@ -249,7 +249,7 @@ def update_time(date, tm):
     draw_string(win, 0, 24, tm)
     return
 
-def GPGGA(a):
+def GGA(a):
     global lostfix, hasfix, gotfix
     if len(a) < 11:
         return
@@ -283,15 +283,15 @@ def GPGGA(a):
     except:
         error = -0.0
     draw_string(win, 6, 72, "%5.1f" % error)
-f['GPGGA'] = GPGGA
+f['GGA'] = GGA
 
-def GPGLL(a):
+def GLL(a):
     if len(a) < 5:
         return
     update_loc(a[1], a[2], a[3], a[4])
-f['GPGLL'] = GPGLL
+f['GLL'] = GLL
 
-def GPRMC(a):
+def RMC(a):
     if len(a) < 10:
         return
     if len(a[9]):
@@ -300,18 +300,18 @@ def GPRMC(a):
     update_loc(a[3], a[4], a[5], a[6])
 
     try:
-        GPVTG(["", a[8], "T", "", "", a[7], "", float(a[7]) * 1.852, a[8]])
+        VTG(["", a[8], "T", "", "", a[7], "", float(a[7]) * 1.852, a[8]])
     except:
         pass
-f['GPRMC'] = GPRMC
+f['RMC'] = RMC
 
-def GPGSA(a):
+def GSA(a):
     if len(a) < 3:
         return
     draw_string(s['SAT'], 5, 55, "%3.3s" % modes_t[a[2]])
-f['GPGSA'] = GPGSA
+f['GSA'] = GSA
 
-def GPGSV(a):
+def GSV(a):
     w = s['SAT']
 
 #    messages = a[1].isdigit() and int(a[1]) or 0
@@ -345,9 +345,9 @@ def GPGSV(a):
         s4[i] if s4 else " ")
         draw_string(w, i, col, t2)
 
-f['GPGSV'] = GPGSV
+f['GSV'] = GSV
 
-def GPVTG(a):
+def VTG(a):
     if len(a) < 9:
         return
     w = s['NAV']
@@ -363,50 +363,16 @@ def GPVTG(a):
     draw_string(w, 0, 58, "%5.1f" % s2)
     draw_string(w, 1, 58, "%5.1f" % s1)
 
-f['GPVTG'] = GPVTG
+f['VTG'] = VTG
 
-def GPZDA(a):
+def ZDA(a):
     w = s['TIME']
     if len(a) < 4:
         return
     update_time("%4s-%2s-%2s" % (a[4], a[3], a[2]),
         "%2s:%2s:%2s" % (a[1][0:2], a[1][2:4], a[1][4:6]))
-f['GPZDA'] = GPZDA
+f['ZDA'] = ZDA
 
-def PMTK707(a):
-    if len(a) < 6:
-        return
-
-    w = s['SAT']
-    sets = a[1].isdigit() and int(a[1]) or 0
-
-    ct = math.floor((time.time() - GPS_OFFSET_SECONDS) / SECONDS_PER_HOUR)
-
-    if sets > 0:
-        startw = (int(a[2]) * 168 + int(a[3]) / 3600)
-        endw = (int(a[4]) * 168 + int(a[5]) / 3600)
-        draw_string(w, 5, 7, "From: %s" % Convert2UTC(startw), 26)
-        draw_string(w, 6, 7, "  To: %s" % Convert2UTC(endw), 26)
-        if (ct >= startw and ct <= endw):
-            draw_string(w, 5, 34, "Ok  ")
-            draw_string(w, 6, 34, "    ")
-        else:
-            draw_string(w, 5, 34, "Not ")
-            draw_string(w, 6, 34, "Crnt")
-    else:
-        draw_string(w, 5, 7, " ", 26)
-        draw_string(w, 6, 7, " ", 26)
-        draw_string(w, 5, 34, " ", 4)
-        draw_string(w, 6, 34, " ", 4)
-f['PMTK707'] = PMTK707
-
-def PMTK010(a):
-    global lostfix
-    if a[1] == "002":
-        refresh_windows()
-        lostfix = time.time()
-    draw_string(s['STATUS'], 0, 0, "Running", 14)
-f['PMTK010'] = PMTK010
 
 def getheightwidth():
     try:
@@ -422,6 +388,9 @@ def comm_loop(fg):
     last_sent = int(time.time())
     last_msg = 0
     nline = 0
+    if not fg.isOpen:
+        print("port not open")
+        return
     while True:
         if not fg.isOpen:
             break
@@ -431,9 +400,10 @@ def comm_loop(fg):
             continue;
 
         try:
-            line = fg.readline()
-        except:
-            pass
+            line = fg.readline().decode("utf-8")
+        except Exception as xxx:
+            print(xxx)
+            continue
 
         if paused: continue;
 
@@ -441,9 +411,8 @@ def comm_loop(fg):
         if len(line) == 0 or line[0] != "$":
             continue;
         line = line[1:-3]
-
         a = line.split(',')
-        stype = a[0]
+        stype = a[0][2:]
         try:
             if stype in f:
                 f[stype](a)
@@ -467,7 +436,7 @@ def comm_loop(fg):
 
         tm = int(time.time())
         if tm % 10 == 0 and last_sent != tm:
-            send_string(fg, "PMTK607")
+#            send_string(fg, "PMTK607")
             last_sent = tm
 
 class comm_loop_thread(Thread):
@@ -625,7 +594,7 @@ def main(stds):
     tty.setraw(tfg, tty.TCSANOW)
     os.close(tfg)
 
-    fg = serial.Serial(port=args.gps_device, timeout=5, baudrate=previous_baudrate)
+    fg = serial.Serial(port=args.gps_device, baudrate=previous_baudrate, timeout=5)
 
     thread = comm_loop_thread(fg)
     thread.setDaemon(True)
@@ -638,6 +607,6 @@ def main(stds):
 
 if __name__ == "__main__":
     rc = curses.wrapper(main)
-    if ex_string: print >> sys.stderr, ex_string
+    if ex_string: print(ex_string)
     sys.exit(rc)
 

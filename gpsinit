@@ -113,12 +113,12 @@ def send_and_wait(fg, string, timeout, r="PMTK001", retries=0):
     return resp
 
 def send_string(fg, string):
-    fg.write("$%s*%02x\r\n" % (string, crc8(string)))
+    fg.write("$%s*%02x\r\n".encode('utf8') % (string.encode('utf8'), crc8(string.encode('utf8'))))
     fg.flush()
 
 def send_speed(fg, speed, count, delay):
     speed_string = "PMTK251,%d" % speed
-    send_string = "$%s*%02x\r\n" % (speed_string, crc8(speed_string))
+    send_string = "$%s*%02x\r\n".encode('utf8') % (speed_string.encode('utf8'), crc8(speed_string.encode('utf8')))
     i = iter(range(count, -1, -1))
     while next(i):
         fg.write(send_string)
@@ -128,39 +128,39 @@ def send_speed(fg, speed, count, delay):
 def setclock(fg):
     uid = os.geteuid()
     if uid != 0:
-        print "set_system_clock must be run as root"
+        print("set_system_clock must be run as root")
         return -1
 
-    print "Setting system clock"
+    print("Setting system clock")
 
     resp = send_and_wait(fg, "PMTK414", 2, r="PMTK514", retries=2)
     if not resp or len(resp) < 18:
-        print "Failed to get current NMEA sentence info"
+        print("Failed to get current NMEA sentence info")
         return -1
 
     resp[18] = '1'
     resp = send_and_wait(fg, ','.join(resp), 3, retries=2)
     if not resp:
-        print "Failed to set NMEA sentence info (may still work)"
+        print("Failed to set NMEA sentence info (may still work)")
 
     resp = send_and_wait(fg, "", 3, r="GPZDA", retries=2)
     if not resp:
-        print "Failed to get date/time"
+        print("Failed to get date/time")
         return -1
 
     tt = (int(resp[4]), int(resp[3]), int(resp[2]), int(resp[1][0:2]), int(resp[1][2:4]), int(resp[1][4:6]), 0)
     tts = "%4d-%02d-%02d %02d:%02d:%02d" % tt[:6]
 
     if tt[0] < 2015:
-        print "The GPS time %s is not valid." % tts
+        print("The GPS time %s is not valid." % tts)
         return -1
 
     rc = subprocess.call(['date', '+%Y-%m-%d %H-%M-%S', '-u', '-s',  '%s' % tts])
     if rc != 0:
-        print "Failed to set date/time: RC %d.  Are you root?" % rc
+        print("Failed to set date/time: RC %d.  Are you root?" % rc)
         return -1
 
-    print "Set system time to %s UTC" % tts
+    print("Set system time to %s UTC" % tts)
 
 def convert_arg_line_to_args(arg_line):
     for arg in arg_line.split():
@@ -169,7 +169,7 @@ def convert_arg_line_to_args(arg_line):
         yield arg
 
 def set_nmea(fg, rate):
-    buf = bytearray('\0' * 14)
+    buf = bytearray("\0\0\0\0\0\0\0\0\0\0\0\0\0\0".encode('utf8'))
     struct.pack_into("<HHHBIBH", buf, 0, PREAMBLE, 14, UART_CMD, 0, rate, 0, EOW)
     struct.pack_into("B", buf, 11, crc8(buf[2:11]))
     fg.write(buf)
@@ -187,17 +187,17 @@ def process_command(fg, line):
     else:
         resp = send_and_wait(fg, line, 5)
         if resp is None or resp[2] != '3':
-            print >> sys.stderr, "Failed to get ACK."
+            print("Failed to get ACK.")
 
 def process_line(fg, device, speed, line):
     rc = 0
     if line[0:len("setspeed ")] == "setspeed ":
         newspeed = int(line[len("setspeed "):].strip())
-        print "Setting new speed: %d" % newspeed
+        print("Setting new speed: %d" % newspeed)
         set_speed(fg, newspeed)
     elif line[0:len("sleep ")] == "sleep ":
         sleeptime = float(line[len("sleep "):].strip())
-        print "Sleeping for %f seconds" % sleeptime
+        print("Sleeping for %f seconds" % sleeptime)
         time.sleep(sleeptime)
     elif line.count("hot_start") >= 1:
         process_command(fg, line.replace("hot_start", "PMTK101"))
@@ -220,18 +220,18 @@ def process_line(fg, device, speed, line):
             pline = p.stdout.readline()
             if not pline:
                 break
-            print ">> " + pline.strip()
+            print(">> " + pline.strip())
     elif line[0:len("epoloader ")] == "epoloader ":
         fg.close()
         a0 = sys.argv[0]
-        d = dirname(a0) + '/'
+        d = dirname(a0) + 'python2 /'
         p = subprocess.Popen(d + line,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, close_fds=True, shell=True)
         while True:
             pline = p.stdout.readline()
             if not pline:
                 break
-            print ">> " + pline.strip()
+            print(">> " + pline.strip())
         fg = serial.Serial(port=device, timeout=5, baudrate=speed)
     else:
         process_command(fg, line)
@@ -243,11 +243,11 @@ def get_known_state(device, speed, previous_baudrate, keep):
     fg.flushInput()
     resp = send_and_wait(fg, "PMTK000", 0.5, retries=1)
     if resp and resp[2] == '3':
-        print "GPS and port are now synchronized at %d" % speed
+        print("GPS and port are now synchronized at %d" % speed)
         return fg
 
 #    Make sure the unit is in NMEA mode
-    print "Making sure the unit is in NMEA mode"
+    print("Making sure the unit is in NMEA mode")
     for t in baudrate:
         rate = baudrate[t]
         fg.baudrate = rate
@@ -258,7 +258,7 @@ def get_known_state(device, speed, previous_baudrate, keep):
     time.sleep(0.500)
     tries = 0
     while True:
-        print "Making sure the speeds match"
+        print("Making sure the speeds match")
 
         for t in baudrate:
             fg.baudrate = baudrate[t]
@@ -271,14 +271,14 @@ def get_known_state(device, speed, previous_baudrate, keep):
         # Now try to send a NoOp command
         resp = send_and_wait(fg, "PMTK000", 0.50, retries=1)
         if resp is None or resp[2] != '3':
-            print >> sys.stderr, "The GPS speed and the port speed couldn't be synchronized."
+            print("The GPS speed and the port speed couldn't be synchronized.")
             tries += 1
             if tries < 2:
-                print "Retrying"
+                print("Retrying")
             else:
                 return None
         else:
-            print "GPS and port are now synchronized at %d" % speed
+            print("GPS and port are now synchronized at %d" % speed)
             return fg
 
 def main():
@@ -301,7 +301,7 @@ def main():
     o = p.communicate()[0]
     if len(o) > 0:
         lines = o.split('\n')
-        print >> sys.stderr, "ERROR: Device %s is open by PID: %s  PROG: %s  USER: %s" % (args.output_device, lines[0][1:], lines[1][1:], lines[2][1:])
+        print("ERROR: Device %s is open by PID: %s  PROG: %s  USER: %s" % (args.output_device, lines[0][1:], lines[1][1:], lines[2][1:]))
         return 1;
 
     if args.no_init:
@@ -314,7 +314,7 @@ def main():
     rc = 0
     if args.command_file:
         fi = io.open(args.command_file, mode="r")
-        print "Processing commands..."
+        print("Processing commands...")
         while True:
             line = fi.readline()
             if not line or len(line) <= 0:
@@ -325,11 +325,11 @@ def main():
             if line[0] == "#":
                 continue
             line = line.replace("${DEVICE}", args.output_device).replace("${SPEED}", str(args.speed))
-            print line
+            print(line)
             (rc, fg) = process_line(fg, args.output_device, args.speed, line)
 
         fi.close()
-        print "Done"
+        print("Done")
     elif args.init_command:
         (rc, fg) = process_line(fg, args.output_device, args.speed, args.init_command)
     else:
@@ -341,4 +341,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main() or 0)
-
