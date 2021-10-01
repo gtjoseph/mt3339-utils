@@ -1,4 +1,5 @@
 #!/usr/bin/python -uO
+# coding: UTF-8
 
 from collections import defaultdict
 from threading import Thread
@@ -18,6 +19,7 @@ import time
 import traceback
 import tty
 import serial
+from serial import threaded
 import curses.panel as panel
 
 
@@ -26,9 +28,12 @@ GPS_OFFSET_SECONDS = 315964786
 SECONDS_PER_WEEK = 604800
 HOURS_PER_WEEK = 168
 
-locale.setlocale(locale.LC_ALL, '')
-code = locale.getpreferredencoding()
-degree = chr(0xb0).encode(code)
+#locale.setlocale(locale.LC_ALL, 'en_US.utf8')
+#code = locale.getpreferredencoding()
+degsym = u'\N{DEGREE SIGN}'
+
+#print(u'abc%s %s' % ("abc", degsym))
+#sys.exit(0)
 
 ex_string = None
 width = 80
@@ -70,7 +75,12 @@ def Convert2Local(GPSHour):
 
 def crc8(d):
     crc = 0
-    for b in bytearray(d):
+    if isinstance(d, (bytearray)):
+        ba = d
+    else:
+        ba = bytearray(d.encode("ASCII"))
+
+    for b in ba:
         crc ^= (b & 0xff)
     return crc
 
@@ -80,70 +90,16 @@ def convert_arg_line_to_args(arg_line):
             continue
         yield arg
 
-class rx_loop_thread(Thread):
-    def __init__(self, fg, r):
-        Thread.__init__(self)
-        self.fg = fg
-        self.result = None;
-        self.killme = False
-        self.r = r
-
-    def getResult(self):
-        return self.result
-
-    def kill(self):
-        self.killme = True
-
-    def run(self):
-        self.fg.flushInput()
-        while True:
-            try:
-                for line in self.fg:
-                    if self.killme: return
-                    if len(line) < 3:
-                        continue
-                    spl = line.strip()[1:-3].split(',')
-                    if spl[0] == self.r:
-                        self.result = spl
-                        return
-            except:
-                pass
-
-def send_and_wait(fg, string, timeout, r="PMTK001", retries=0):
-    resp = None
-    count = 0
-
-    while resp == None and count <= retries:
-        thread = rx_loop_thread(fg, r)
-        thread.setDaemon(True)
-        thread.start()
-        fg.flushOutput()
-        send_string(fg, string);
-        thread.join(timeout)
-        if thread.isAlive():
-            thread.kill()
-            count += 1
-            continue
-        return thread.getResult()
-    return resp
-
 def send_string(fg, string):
-    fg.flushInput()
-    fg.write("$%s*%02x\r\n" % (string, crc8(string)))
-    fg.flushInput()
+    buf = "$%s*%02x\r\n" % (string, crc8(string))
+    fg.write(buf.encode("ASCII"))
+    fg.flush()
 
 def format_dms(dddmm, direction):
     s = ll.split(dddmm)
     if len(s) < 3:
         return " " * 17
-    return "%3s%c %2s' %05.2f\" %s" % \
-        (s[1], 0xb0, s[2], float(s[3]) * 60.0, direction)
-
-def format_heading(heading, ref):
-    try:
-        return "%3d%s%s" % (math.floor(float(heading)), chr(0xb0).encode(code), ref)
-    except:
-        return "     "
+    return u'%3s%s %2s\' %05.2f\" %s' % (s[1], degsym if sys.version_info[0] >= 3 else "", s[2], float(s[3]) * 60.0, direction)
 
 def draw_string(win, row, col, st, erase=-1):
     if erase < 0: erase = len(st)
@@ -152,7 +108,7 @@ def draw_string(win, row, col, st, erase=-1):
     if (st == t1): return False
     dw.erase()
     try:
-        dw.addstr(0, 0, st)
+        dw.addstr(0, 0, st.encode('utf-8'))
     except:
         pass
 #    print >>sys.stderr, time.time(), "'%s'" % t1, "'%s'" % st
@@ -175,13 +131,18 @@ def draw_win(wid, name, rows, cols, row, col):
 def draw_help():
 #                                           1         2         3         4         5
 #                                  123456789012345678901234567890123456789012345678901234567890
-    draw_string(s['HELP'], 0, 0, "GPSSTATUS: quit, pause, gps command, pause nmea, refresh")
+    draw_string(s['HELP'], 0, 0, "GPSSTATUS: quit, pause, pause nmea, refresh, version")
+    draw_string(s['HELP'], 1, 0, "           cold start,  warm start, hot start")
+
     a = curses.A_BOLD | curses.A_UNDERLINE
     s['HELP'].chgat(0, 11, 1, a)
     s['HELP'].chgat(0, 17, 1, a)
     s['HELP'].chgat(0, 24, 1, a)
-    s['HELP'].chgat(0, 43, 1, a)
-    s['HELP'].chgat(0, 49, 1, a)
+    s['HELP'].chgat(0, 36, 1, a)
+    s['HELP'].chgat(0, 45, 1, a)
+    s['HELP'].chgat(1, 11, 1, a)
+    s['HELP'].chgat(1, 24, 1, a)
+    s['HELP'].chgat(1, 36, 1, a)
     s['HELP'].refresh()
 draws['HELP'] = draw_help
 
@@ -209,8 +170,8 @@ draws['TIME'] = draw_time
 def draw_sat():
     win = s['SAT']
     draw_string(win, 0, 0, "  Sat:")
-    draw_string(win, 1, 0, "Elev\xb0:")
-    draw_string(win, 2, 0, "  Az\xb0:")
+    draw_string(win, 1, 0, u"Elev°:" if sys.version_info[0] >= 3 else " Elev:")
+    draw_string(win, 2, 0, u"  Az°:" if sys.version_info[0] >= 3 else "   Az:")
     draw_string(win, 3, 0, "  SNR:")
 
     draw_string(win, 5, 40, "Fix Type:")
@@ -248,6 +209,21 @@ def update_time(date, tm):
     draw_string(win, 0, 6, date)
     draw_string(win, 0, 24, tm)
     return
+
+def init_windows():
+    global width, gps_device
+
+    s['HELP'] = curses.newwin(2, width, 0, 0)
+    draw_help()
+
+    draw_win('TIME', "Date/Time", 3, width / 2, 2, 0)
+    draw_win('STATUS', "Status", 3, width / 2, 2, width / 2)
+    draw_string(s['STATUS'], 0, 0, "Running")
+    draw_string(s['STATUS'], 0, 15, "Device: %s" % gps_device)
+    draw_win('NAV', "Navigation", 4, width, 5, 0)
+    draw_win('SAT', "Satellites", 9, width, 9, 0)
+    draw_win('NMEA', "NMEA", 12, width, 18, 0)
+    s['NMEA'].scrollok(True)
 
 def GGA(a):
     global lostfix, hasfix, gotfix
@@ -351,8 +327,11 @@ def VTG(a):
     if len(a) < 9:
         return
     w = s['NAV']
-    t2 = format_heading(a[1], a[2])
-    draw_string(w, 0, 72, "%6.6s" % t2)
+
+    draw_string(w, 0, 72, "%3.0f" % float(a[1]))
+    draw_string(w, 0, 75, "\xb0")
+    draw_string(w, 0, 76, a[2])
+
     try:
         s1 = float(a[5]) * 1.15078
         s2 = float(a[7])
@@ -374,6 +353,18 @@ def ZDA(a):
 f['ZDA'] = ZDA
 
 
+def TK707(a):
+    w = s['SAT']
+    vstart = (int(a[2]) * 168 + int(a[3]) / 3600)
+    vend = (int(a[4]) * 168 + int(a[5]) / 3600)
+    draw_string(w, 5, 10, "From: %s" % (Convert2UTC(vstart)))
+    draw_string(w, 6, 10, "  To: %s" % (Convert2UTC(vend)))
+f['TK707'] = TK707
+
+def TK705(a):
+    draw_string(s['STATUS'], 0, 0, ','.join(str(x) for x in a[1:]))
+f['TK705'] = TK705
+
 def getheightwidth():
     try:
         return int(os.environ["LINES"]), int(os.environ["COLUMNS"])
@@ -383,33 +374,22 @@ def getheightwidth():
         if not height: return 25, 80
         return height, width
 
-def comm_loop(fg):
-    global ex_string
-    last_sent = int(time.time())
-    last_msg = 0
-    nline = 0
-    if not fg.isOpen:
-        print("port not open")
-        return
-    while True:
-        if not fg.isOpen:
-            break
 
-        if paused:
-            time.sleep(0.250)
-            continue;
 
-        try:
-            line = fg.readline().decode("utf-8")
-        except Exception as xxx:
-            print(xxx)
-            continue
+class SerialReceiver(serial.threaded.LineReader):
 
-        if paused: continue;
+    TERMINATOR = b'\r\n'
 
+    def __init__(self):
+        super(SerialReceiver, self).__init__()
+        self.last_sent = int(time.time())
+        self.last_msg = 0
+        self.nline = 0
+
+    def handle_line(self, line):
         line = line.strip()
         if len(line) == 0 or line[0] != "$":
-            continue;
+            return;
         line = line[1:-3]
         a = line.split(',')
         stype = a[0][2:]
@@ -418,38 +398,28 @@ def comm_loop(fg):
                 f[stype](a)
 
             curr_msg = int(time.time())
-            if curr_msg != last_msg:
-                last_msg = curr_msg
+            if curr_msg != self.last_msg:
+                self.last_msg = curr_msg
                 s['NMEA'].erase()
-                nline = 0
+                self.nline = 0
 
             if not nmea_paused:
                 y, x = s['NMEA'].getmaxyx()
-                s['NMEA'].addnstr(min(nline, y - 1), 0, line, x)
+                s['NMEA'].addnstr(min(self.nline, y - 1), 0, line, x)
                 s['NMEA'].refresh()
-                nline += 1
+                self.nline += 1
         except:
             ex_string = traceback.format_exc()
             curses.flushinp()
             curses.ungetch('q')
-            break
 
         tm = int(time.time())
-        if tm % 10 == 0 and last_sent != tm:
-#            send_string(fg, "PMTK607")
-            last_sent = tm
-
-class comm_loop_thread(Thread):
-    def __init__(self, fg):
-        Thread.__init__(self)
-        self.fg = fg
-
-    def run(self):
-        comm_loop(self.fg)
+        if tm % 10 == 0 and self.last_sent != tm:
+    #        send_string(fg, "PMTK607")
+            self.last_sent = tm
 
 def input_loop(fg):
     global paused, nmea_paused, stdscr
-    stdscr.nodelay(1)
     while True:
         qq = stdscr.getch()
         if qq <= 0:
@@ -477,55 +447,21 @@ def input_loop(fg):
             paused = True
             refresh_windows()
             paused = False
-        elif qq == 'g':
-            paused = True
-            nw = curses.newwin(9, 45, 9, 20)
-            nw.border()
-            draw_string(nw, 1, 1, "h: hot start")
-            draw_string(nw, 2, 1, "w: warm start")
-            draw_string(nw, 3, 1, "c: cold start")
-            draw_string(nw, 4, 1, "v: show version")
-            draw_string(nw, 5, 1, "q: quit")
-            nw.noutrefresh()
-            np = panel.new_panel(nw)
-            np.top()
-            np.show()
-            panel.update_panels()
-            curses.doupdate()
-
-            stdscr.nodelay(0)
-            while True:
-                qq = chr(stdscr.getch())
-
-                if qq == 'h':
-                    draw_string(nw, 7, 1, "Hot Starting.  Please wait...")
-                    send_and_wait(fg, "PMTK101", 3)
-                    draw_string(s['STATUS'], 0, 0, "Hot Started")
-                    break
-                elif qq == 'w':
-                    draw_string(nw, 7, 1, "Warm Starting.  Please wait...")
-                    send_and_wait(fg, "PMTK102", 3)
-                    draw_string(s['STATUS'], 0, 0, "Warm Started")
-                    break
-                elif qq == 'c':
-                    draw_string(nw, 7, 1, "Cold Starting.  Please wait...")
-                    send_and_wait(fg, "PMTK103", 5)
-                    draw_string(s['STATUS'], 0, 0, "Cold Started")
-                    break
-                elif qq == 'v':
-                    resp = send_and_wait(fg, "PMTK605", 5, r="PMTK705")
-                    draw_string(nw, 7, 1, ','.join(str(x) for x in resp[1:]))
-                elif qq == 'q':
-                    break
-
-            stdscr.nodelay(1)
-            np.hide()
-            panel.update_panels()
-            curses.doupdate()
-            del nw
-            del np
-            fg.flushInput()
-            paused = False
+        elif qq == 'h':
+            send_string(fg, "PMTK101")
+            draw_string(s['STATUS'], 0, 0, "Hot Started")
+        elif qq == 'w':
+            send_string(fg, "PMTK102")
+            draw_string(s['STATUS'], 0, 0, "Warm Started")
+        elif qq == 'c':
+            send_string(fg, "PMTK103")
+            draw_string(s['STATUS'], 0, 0, "Cold Started")
+        elif qq == 'v':
+            send_string(fg, "PMTK605")
+        elif qq == 'e':
+            send_string(fg, "PMTK607")
+        elif qq == 'q':
+            break
 
 class input_loop_thread(Thread):
     def __init__(self, fg):
@@ -540,21 +476,9 @@ def refresh_windows():
         s[sid].erase()
         s[sid].refresh()
         if sid in draws: draws[sid]()
-
-def init_windows():
-    global width, gps_device
-
-    s['HELP'] = curses.newwin(1, width, 0, 0)
-    draw_help()
-
-    draw_win('TIME', "Date/Time", 3, width / 2, 1, 0)
-    draw_win('STATUS', "Status", 3, width / 2, 1, width / 2)
     draw_string(s['STATUS'], 0, 0, "Running")
     draw_string(s['STATUS'], 0, 15, "Device: %s" % gps_device)
-    draw_win('NAV', "Navigation", 4, width, 4, 0)
-    draw_win('SAT', "Satellites", 9, width, 8, 0)
-    draw_win('NMEA', "NMEA", 12, width, 17, 0)
-    s['NMEA'].scrollok(True)
+    send_string(fg, "PMTK607")
 
 def sigwinch_handler(n, frame):
     global width, paused
@@ -564,9 +488,14 @@ def sigwinch_handler(n, frame):
     init_windows()
     paused = False
 
+class gpsproto(SerialReceiver):
+    def __init__(self):
+        super(gpsproto, self).__init__()
+
 def main(stds):
     global paused, nmea_paused, stdscr, width, gps_device
     global lostfix, hasfix, gotfix
+    global fg
 
     parser = argparse.ArgumentParser(fromfile_prefix_chars='@',
     description="Displays NMEA Data",
@@ -595,12 +524,9 @@ def main(stds):
     os.close(tfg)
 
     fg = serial.Serial(port=args.gps_device, baudrate=previous_baudrate, timeout=5)
-
-    thread = comm_loop_thread(fg)
-    thread.setDaemon(True)
-    thread.start()
-
-    input_loop(fg)
+    with serial.threaded.ReaderThread(fg, gpsproto) as protocol:
+        send_string(fg, "PMTK607")
+        input_loop(fg)
 
     if fg and fg.isOpen:
         fg.close()

@@ -51,13 +51,13 @@ def main():
     fi = io.open(args.input_file, mode="rb")
     header = fi.read(75)
     if header[0:3] == header[60:63]:
-        print "Opening EPO Type I file"
+        print("Opening EPO Type I file")
         EPO_SET_SIZE = 1920
     elif header[0:3] == header[72:75]:
-        print "Opening EPO Type II file"
+        print("Opening EPO Type II file")
         EPO_SET_SIZE = 2304;
     else:
-        print "Unknown file type."
+        print("Unknown file type.")
         return 1
         
     fi.close()
@@ -69,19 +69,19 @@ def main():
         if len(epo_set) == 0:
             break
         sets += 1
-        epo_start = struct.unpack("<i", epo_set[0:3]+'\0')[0]
+        epo_start = struct.unpack("<i", epo_set[0:3]+b'\0')[0]
         if sets == 1:
             start = epo_start
             
-        print "Set: %4d.  GPS Wk: %4d  Hr: %3d  Sec:  %6d  %s to %s UTC" % (
+        print("Set: %4d.  GPS Wk: %4d  Hr: %3d  Sec:  %6d  %s to %s UTC" % (
             sets, (epo_start / HOURS_PER_WEEK), (epo_start % HOURS_PER_WEEK),
             (epo_start % HOURS_PER_WEEK) * SECONDS_PER_HOUR,
-            Convert2UTC(epo_start), Convert2UTC(epo_start + 6))
+            Convert2UTC(epo_start), Convert2UTC(epo_start + 6)))
         
     fi.close()
 
-    print "%4d EPO sets.  Valid from %s to %s UTC\n" % (sets,
-    Convert2UTC(start), Convert2UTC(epo_start + 6))
+    print("%4d EPO sets.  Valid from %s to %s UTC\n" % (sets,
+    Convert2UTC(start), Convert2UTC(epo_start + 6)))
     return 0
 
 if __name__ == "__main__":
