@@ -105,7 +105,7 @@ def send_and_wait(fg, string, timeout, r="PMTK001", retries=0):
         fg.flushOutput()
         send_string(fg, string);
         thread.join(timeout)
-        if thread.isAlive():
+        if thread.is_alive():
             thread.kill()
             count += 1
             continue
