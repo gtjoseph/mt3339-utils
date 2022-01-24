@@ -17,11 +17,17 @@ import serial
 global output_device
 global keep_new_speed
 global speed
+global debug
 
 PREAMBLE = 0x2404
 EPO_CMD = 0x02d2
 EOW = 0x0a0d
 UART_CMD = 253
+SATS_PER_EPO = 32
+SECONDS_PER_HOUR = 3600
+GPS_OFFSET_SECONDS = 315964786
+SECONDS_PER_WEEK = 604800
+HOURS_PER_WEEK = 168
 DEFAULT_COMMAND = "PMTK314,1,1,1,1,5,5,0,0,0,0,0,0,0,0,0,0,0,1,0"
 
 baudrate = {
@@ -34,6 +40,16 @@ baudrate = {
 }
 
 baudrates = [4800, 9600, 19200, 38400, 57600, 115200 ]
+
+def Convert2UTC(GPSHour):
+    GPSHour *= SECONDS_PER_HOUR
+    GPSHour += GPS_OFFSET_SECONDS
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(GPSHour))
+
+def Convert2Local(GPSHour):
+    GPSHour *= SECONDS_PER_HOUR
+    GPSHour += GPS_OFFSET_SECONDS
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(GPSHour))
 
 def crc8(d):
     crc = 0
@@ -50,19 +66,19 @@ def send_string(fg, string, flush=True):
         ba = bytearray(string.encode("ASCII"))
 
     buf = b"$%s*%02x\r\n" % (ba, crc8(ba))
+    if debug:
+        print(">> %s" % buf.decode("ASCII").strip())
     fg.write(buf)
     if flush:
         fg.flush()
 
-def send_and_wait(fg, string, timeout, r="PMTK001,0,3", retries=0, debug=False):
+def send_and_wait(fg, string, timeout, r="PMTK001,0,3", retries=0):
     spl = None
     count = 0
     temp_timeout = fg.timeout
     fg.timeout = timeout
     while spl == None and count <= retries:
         resp = None
-        if debug:
-            print(">> %s" % string)
         send_string(fg, string, False);
         fg.reset_input_buffer()
         fg.flush()
@@ -70,7 +86,7 @@ def send_and_wait(fg, string, timeout, r="PMTK001,0,3", retries=0, debug=False):
         try:
             sresp = resp.decode("ASCII")
             if debug:
-                print("<< %s" % sresp)
+                print("<< %s" % sresp.strip())
             ix = sresp.find(r)
             if ix >= 0:
                 spl = sresp.strip()[ix:-3].split(',')
@@ -235,16 +251,17 @@ def process_command(fg, line, expected_response="PMTK"):
         send_string(fg, line[1:])
         time.sleep(0.250)
     else:
-        resp = send_and_wait(fg, line, 5, r=expected_response, debug=False)
+        resp = send_and_wait(fg, line, 5, r=expected_response)
         if resp is None:
             print("Failed to get ACK.")
             rc = 1
-    return rc
+    return (rc, resp)
 
 def process_line(fg, line):
     global output_device
     global keep_new_speed
     global speed
+    global debug
     rc = 0
     if line[0:len("setspeed ")] == "setspeed ":
         newspeed = int(line[len("setspeed "):].strip())
@@ -259,6 +276,20 @@ def process_line(fg, line):
         sleeptime = float(line[len("sleep "):].strip())
         print("Sleeping for %f seconds" % sleeptime)
         time.sleep(sleeptime)
+    elif line.count("get_version") >= 1:
+        rc, resp = process_command(fg, line.replace("get_version", "PMTK605"), expected_response="PMTK705")
+        if rc == 0:
+            print(resp, file=sys.stderr)
+    elif line.count("get_epo") >= 1:
+        rc, resp = process_command(fg, line.replace("get_epo", "PMTK607"), expected_response="PMTK707")
+        if rc == 0:
+            vstart = int(int(resp[2]) * 168 + int(resp[3]) / 3600)
+            vend = int(int(resp[4]) * 168 + int(resp[5]) / 3600)
+            print("  EPO in NVRAM: %s to %s UTC" % (Convert2UTC(vstart), Convert2UTC(vend)), file=sys.stderr)
+    elif line.count("debug_on") >= 1:
+        debug = True
+    elif line.count("debug_off") >= 1:
+        debug = False
     elif line.count("hot_start") >= 1:
         rc = process_command(fg, line.replace("hot_start", "PMTK101"), expected_response="$PGACK")
     elif line.count("warm_start") >= 1:
@@ -310,6 +341,7 @@ def main():
     global output_device
     global keep_new_speed
     global speed
+    global debug
 
     parser = argparse.ArgumentParser(fromfile_prefix_chars='@',
     description="Initialized GPS to known state",
@@ -321,6 +353,7 @@ def main():
     group.add_argument("-f", "--command_file", metavar="<command_file>", dest="command_file", help="A file containing commands used to initialize the GPS")
     group.add_argument("-n", "--no-init", dest="no_init", default=False, action="store_true", help="Skip the initialization, just run the commands")
     parser.add_argument("-k", "--keep-new-speed", dest="keep_new_speed", default=True, action="store_true", help="Don't restore the old speed on exit")
+    parser.add_argument("-d", "--debug", default=False, dest="debug", action="store_true", help="Print debugging info")
 
     parser.add_argument("output_device", metavar="<gps_device>", help="GPS serial device such as '/dev/ttyUSB0'")
 
@@ -343,6 +376,7 @@ def main():
         args.speed = port_baudrate
 
     speed = args.speed
+    debug = args.debug
 
     if args.no_init:
         fg = serial.Serial(args.output_device, timeout=5, baudrate=args.speed)
@@ -352,6 +386,7 @@ def main():
     if fg is None: return 1
 
     rc = 0
+    fi = None
     if args.command_file:
         fi = io.open(args.command_file, mode="r")
         print("Processing commands...")

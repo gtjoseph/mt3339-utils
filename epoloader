@@ -14,6 +14,7 @@ import tty
 
 import serial
 
+global debug
 
 PREAMBLE = 0x2404
 EPO_CMD = 0x02d2
@@ -83,19 +84,18 @@ def send_string(fg, string, flush=True):
         ba = bytearray(string.encode("ASCII"))
 
     buf = b"$%s*%02x\r\n" % (ba, crc8(ba))
+    if debug: print(">> %s" % buf.decode("ASCII").strip())
     fg.write(buf)
     if flush:
         fg.flush()
 
-def send_and_wait(fg, string, timeout, r="PMTK001,0,3", retries=0, debug=False):
+def send_and_wait(fg, string, timeout, r="PMTK001,0,3", retries=0):
     spl = None
     count = 0
     temp_timeout = fg.timeout
     fg.timeout = timeout
     while spl == None and count <= retries:
         resp = None
-        if debug:
-            print(">> %s" % string)
         send_string(fg, string, False);
         fg.reset_input_buffer()
         fg.flush()
@@ -103,7 +103,7 @@ def send_and_wait(fg, string, timeout, r="PMTK001,0,3", retries=0, debug=False):
         try:
             sresp = resp.decode("ASCII")
             if debug:
-                print("<< %s" % sresp)
+                print("<< %s" % sresp.strip())
             ix = sresp.find(r)
             if ix >= 0:
                 spl = sresp.strip()[ix:-3].split(',')
@@ -252,6 +252,8 @@ def getBinaryResponse(fg, command):
     return (-1, -1)
 
 def main():
+    global debug
+
     parser = argparse.ArgumentParser(fromfile_prefix_chars='@',
     description="Loads EPO data sets to MT3339 GPS",
     epilog="You can use '@filename' to read arguments from a file.")
@@ -265,11 +267,13 @@ def main():
     parser.add_argument("-c", "--clear", dest="clear_epo", default=False, action="store_true", help="Clears the existing EPO data from the unit")
     parser.add_argument("-n", "--no-init", dest="no_init", default=False, action="store_true", help="Skips the initialization")
     parser.add_argument("-m", "--max-sets", type=int, default=26, dest="max_sets", help="Send only n sets")
+    parser.add_argument("-d", "--debug", default=False, dest="debug", action="store_true", help="Print debugging info")
 
     parser.add_argument("input_file", metavar="<EPO_File>", help="EPO File or '-' to just set the known parameters")
     parser.add_argument("output_device", metavar="<gps_device>", help="GPS serial device such as '/dev/ttyUSB0'")
 
     args = parser.parse_args()
+    debug=args.debug
 
     fi = None
     if args.input_file != "-":
@@ -326,6 +330,10 @@ def main():
         return 1
 
     time.sleep(0.500)
+    resp = send_and_wait(fg, "PMTK605", 2, r="PMTK705", retries=2)
+    if resp is not None:
+        print("GPS Version: ", resp)
+
     if not args.location_string is None or not args.time_string is None:
         if args.time_string == "-":
             t = time.time();
