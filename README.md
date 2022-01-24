@@ -36,7 +36,7 @@ So now what?  Use the tools...
 eporetrieve [ <file_name> [ <output_file> ] ]
 
 Example:
-# eporetrieve MTK14.EPO /tmp/MTK14.EPO
+# eporetrieve EPO.DAT /tmp/EPO.DAT
  
 ```
 This script is just a wrapper around wget.  It's generally best to do this in the morning UTC
@@ -59,34 +59,36 @@ optional arguments:
 
 You can use '@filename' to read arguments from a file.
 ```
-To examine the file /tmp/MTK14.EPO...
+To examine the file /tmp/EPO.DAT...
 ```
-# epoinfo /tmp/MTK14.EPO
-Opening EPO Type I file
-Set:    1.  GPS Wk: 1832  Hr:  48  Sec:  172800  2015-02-16 23:59:46 to 2015-02-17 05:59:46 UTC
-Set:    2.  GPS Wk: 1832  Hr:  54  Sec:  194400  2015-02-17 05:59:46 to 2015-02-17 11:59:46 UTC
-Set:    3.  GPS Wk: 1832  Hr:  60  Sec:  216000  2015-02-17 11:59:46 to 2015-02-17 17:59:46 UTC
-Set:    4.  GPS Wk: 1832  Hr:  66  Sec:  237600  2015-02-17 17:59:46 to 2015-02-17 23:59:46 UTC
-Set:    5.  GPS Wk: 1832  Hr:  72  Sec:  259200  2015-02-17 23:59:46 to 2015-02-18 05:59:46 UTC
+# epoinfo /tmp/EPO.DAT
+Opening EPO Type II file
+Set:    1.  GPS Wk: 2194  Hr:  24  Sec:   86400  2022-01-23 23:59:46 to 2022-01-24 05:59:46 UTC
+Set:    2.  GPS Wk: 2194  Hr:  30  Sec:  108000  2022-01-24 05:59:46 to 2022-01-24 11:59:46 UTC
+Set:    3.  GPS Wk: 2194  Hr:  36  Sec:  129600  2022-01-24 11:59:46 to 2022-01-24 17:59:46 UTC
+Set:    4.  GPS Wk: 2194  Hr:  42  Sec:  151200  2022-01-24 17:59:46 to 2022-01-24 23:59:46 UTC
+Set:    5.  GPS Wk: 2194  Hr:  48  Sec:  172800  2022-01-24 23:59:46 to 2022-01-25 05:59:46 UTC
 <snip>
-Set:   53.  GPS Wk: 1834  Hr:  24  Sec:   86400  2015-03-01 23:59:46 to 2015-03-02 05:59:46 UTC
-Set:   54.  GPS Wk: 1834  Hr:  30  Sec:  108000  2015-03-02 05:59:46 to 2015-03-02 11:59:46 UTC
-Set:   55.  GPS Wk: 1834  Hr:  36  Sec:  129600  2015-03-02 11:59:46 to 2015-03-02 17:59:46 UTC
-Set:   56.  GPS Wk: 1834  Hr:  42  Sec:  151200  2015-03-02 17:59:46 to 2015-03-02 23:59:46 UTC
-  56 EPO sets.  Valid from 2015-02-16 23:59:46 to 2015-03-02 23:59:46 UTC
+Set:  115.  GPS Wk: 2198  Hr:  36  Sec:  129600  2022-02-21 11:59:46 to 2022-02-21 17:59:46 UTC
+Set:  116.  GPS Wk: 2198  Hr:  42  Sec:  151200  2022-02-21 17:59:46 to 2022-02-21 23:59:46 UTC
+Set:  117.  GPS Wk: 2198  Hr:  48  Sec:  172800  2022-02-21 23:59:46 to 2022-02-22 05:59:46 UTC
+Set:  118.  GPS Wk: 2198  Hr:  54  Sec:  194400  2022-02-22 05:59:46 to 2022-02-22 11:59:46 UTC
+Set:  119.  GPS Wk: 2198  Hr:  60  Sec:  216000  2022-02-22 11:59:46 to 2022-02-22 17:59:46 UTC
+Set:  120.  GPS Wk: 2198  Hr:  66  Sec:  237600  2022-02-22 17:59:46 to 2022-02-22 23:59:46 UTC
+ 120 EPO sets.  Valid from 2022-01-23 23:59:46 to 2022-02-22 23:59:46 UTC
 
 ```
-Each set covers a 6 hour period so for a 14 day file, there should be 56 sets in the file.
-For the PA6H, make sure the file is a Type I file and that the "Valid from" span includes
-the current time. 
+The current EPO.DAT provides by MediaTek is a type II file covering 30 days.  Since each
+set covers 6 hours, the file will contain 120 sets.  However, the MT3999 can only keep
+26 sets of Type II data, or about 6.5 days worth, in it's NVRAM.  See below.
+
 
 ### Load the EPO file to the GPS:
 
 #### epoloader:  Loads an EPO file to the GPS
 ```
-usage: epoloader [-h] [-t yyyy,mm,dd,hh,mm,ss | -]
-                 [-l lat.dddddd,lon.dddddd,alt]
-                 [-s {4800,9600,19200,38400,57600,115200}] [-k] [-c]
+usage: epoloader [-h] [-t yyyy,mm,dd,hh,mm,ss | -] [-l lat.dddddd,lon.dddddd,alt]
+                 [-s {4800,9600,19200,38400,57600,115200}] [-k] [-c] [-n] [-m MAX_SETS]
                  <EPO_File> <gps_device>
 
 Loads EPO data sets to MT3339 GPS
@@ -95,20 +97,21 @@ positional arguments:
   <EPO_File>            EPO File or '-' to just set the known parameters
   <gps_device>          GPS serial device such as '/dev/ttyUSB0'
 
-optional arguments:
+options:
   -h, --help            show this help message and exit
   -s {4800,9600,19200,38400,57600,115200}, --speed {4800,9600,19200,38400,57600,115200}
                         Interface speed
   -k, --keep-new-speed  Don't restore the old speed on exit
   -c, --clear           Clears the existing EPO data from the unit
-  -n, --no-init         The unit is already in the correct state
+  -n, --no-init         Skips the initialization
+  -m MAX_SETS, --max-sets MAX_SETS
+                        Send only n sets
 
 optional known time and location parameters:
   -t yyyy,mm,dd,hh,mm,ss | - , --time yyyy,mm,dd,hh,mm,ss | - 
                         Current UTC or UTC from host
   -l lat.dddddd,lon.dddddd,alt, --location lat.dddddd,lon.dddddd,alt
-                        Current location specified in decimal degrees and
-                        meters
+                        Current location specified in decimal degrees and meters
 
 You can use '@filename' to read arguments from a file.
 ```
@@ -153,35 +156,56 @@ setting both the unit and the port to the correct speed, then resetting both to 
 original speed on completion.  Use 115200 (the default) unless you have a flaky setup.  You can also
 specify the '-k' option to leave the unit and port at the new speed.
 
-NOTE:  It's pretty much impossible to mess up the GPS unit with this process as it doesn't touch
+It's pretty much impossible to mess up the GPS unit with this process as it doesn't touch
 the unit's firmware.  If you get into a bad communications state, just try again, use gpsinit, 
 try holding the EN signal low for a second, or remove the
-power and battery for a few seconds to reset back to factory state.    
+power and battery for a few seconds to reset back to factory state.
 
-Now you're ready.  Assuming your location and time is in epoloader.conf, the EPO file is
-/tmp/MTK14.EPO, your device is connected to /dev/ttyUSB1 and you want to use the default 115200 speed, then...
+Almost there... Since the MT3339 can only hold 26 EPO sets, the default maximum number
+of sets to send is 26.  You can change this with the `-m / --max-sets` option but
+attempting to send more than 26 will cause the validation to fail 
+
+NOW you're ready.  Assuming your location and time is in epoloader.conf, the EPO file is
+/tmp/EPO.DAT, your device is connected to /dev/ttyUSB1 and you want to use the default 115200 speed, then...
 ```
-# epoloader @epoloader.conf /tmp/MTK14.EPO /dev/ttyUSB1
-Opening EPO Type I file
-Current port speed: 9600
-Set port speed: 115200
-Setting known values: 38.889468,-77.352420,5  2015,02,17,23,15,35
+$ ./epoloader -s 115200 -c -l 39.754598,-105.236353,1780 -t- /tmp/EPO.DAT /dev/ttyUSB1
+Opening EPO Type II file with 120 sets
+Setting NMEA at 115200 baud.
+   Unit is currently in NMEA mode at 115200 baud.
+GPS and port are now synchronized at 115200
+Setting known values: 39.754598,-105.236353,1780  2022,01,24,14,23,04
+Time set
+Location set
 Clearing existing EPO data
 Setting binary mode, speed: 115200
-Sending 56 EPO sets
-Sending set    1.  Valid from 2015-02-16 23:59:46 UTC
-Sending set    2.  Valid from 2015-02-17 05:59:46 UTC
-Sending set    3.  Valid from 2015-02-17 11:59:46 UTC
-Sending set    4.  Valid from 2015-02-17 17:59:46 UTC
-Sending set    5.  Valid from 2015-02-17 23:59:46 UTC
-<snip>
-Sending set   52.  Valid from 2015-03-01 17:59:46 UTC
-Sending set   53.  Valid from 2015-03-01 23:59:46 UTC
-Sending set   54.  Valid from 2015-03-02 05:59:46 UTC
-Sending set   55.  Valid from 2015-03-02 11:59:46 UTC
-Sending set   56.  Valid from 2015-03-02 17:59:46 UTC
-  56 sets sent.  Valid from 2015-02-16 23:59:46 to 2015-03-02 23:59:46 UTC
-Resetting NMEA Mode
+Sending 26 EPO sets of 120
+Sending set    1.  Valid from 2022-01-23 23:59:46 UTC
+Sending set    2.  Valid from 2022-01-24 05:59:46 UTC
+Sending set    3.  Valid from 2022-01-24 11:59:46 UTC
+Sending set    4.  Valid from 2022-01-24 17:59:46 UTC
+Sending set    5.  Valid from 2022-01-24 23:59:46 UTC
+Sending set    6.  Valid from 2022-01-25 05:59:46 UTC
+Sending set    7.  Valid from 2022-01-25 11:59:46 UTC
+Sending set    8.  Valid from 2022-01-25 17:59:46 UTC
+Sending set    9.  Valid from 2022-01-25 23:59:46 UTC
+Sending set   10.  Valid from 2022-01-26 05:59:46 UTC
+Sending set   11.  Valid from 2022-01-26 11:59:46 UTC
+Sending set   12.  Valid from 2022-01-26 17:59:46 UTC
+Sending set   13.  Valid from 2022-01-26 23:59:46 UTC
+Sending set   14.  Valid from 2022-01-27 05:59:46 UTC
+Sending set   15.  Valid from 2022-01-27 11:59:46 UTC
+Sending set   16.  Valid from 2022-01-27 17:59:46 UTC
+Sending set   17.  Valid from 2022-01-27 23:59:46 UTC
+Sending set   18.  Valid from 2022-01-28 05:59:46 UTC
+Sending set   19.  Valid from 2022-01-28 11:59:46 UTC
+Sending set   20.  Valid from 2022-01-28 17:59:46 UTC
+Sending set   21.  Valid from 2022-01-28 23:59:46 UTC
+Sending set   22.  Valid from 2022-01-29 05:59:46 UTC
+Sending set   23.  Valid from 2022-01-29 11:59:46 UTC
+Sending set   24.  Valid from 2022-01-29 17:59:46 UTC
+Sending set   25.  Valid from 2022-01-29 23:59:46 UTC
+Sending set   26.  Valid from 2022-01-30 05:59:46 UTC
+  26 sets sent.  Valid from 2022-01-23 23:59:46 to 2022-01-30 11:59:46 UTC
 Verified EPO in NVRAM matches file
 
 ```
@@ -271,23 +295,25 @@ sets NMEA sentences and frequency and finally does an epo load.
 #
 #  The following commands are recognized...
 #
-#  sleep <seconds>				Sleep for n.nnn seconds
-#  set_system_clock				Gets the date/time from the GPS unit and sets the system clock
-#  setspeed <newspeed>			Set new port and unit speed to <newspeed>
-#  epoloader <epoloader_args>   Run epoloader
-#  factory_reset				Clear system/user configurations then cold start
-#                               	The unit and port speed will be reset to 9600
+#  sleep <seconds>                 Sleep for n.nnn seconds
+#  set_system_clock                Gets the date/time from the GPS unit and sets the system clock
+#  setspeed <newspeed>             Set new port and unit speed to <newspeed>
+#  clear_epo                       Clear the existing EPO from the device
+#  eporetrieve <eporetrieve_args>  Run eporetrieve
+#  epoloader <epoloader_args>      Run epoloader
+#  factory_reset                   Clear system/user configurations then cold start
+#                                  The unit and port speed will be reset to 9600
 
 #  The following commands can be prefixed with '-' to not wait for an ACK.
-#  hot_start					Restart using all available data
-#  warm_start					Don't use Ephemeris at restart
-#  cold_start					Don't use Time, Position, Almanacs and Ephemeris
-#									data at re‐start
-#  PMTKnnn,<args>               Send the specified PMTK command
+#  hot_start          Restart using all available data
+#  warm_start         Don't use Ephemeris at restart
+#  cold_start         Don't use Time, Position, Almanacs and Ephemeris
+#	                    data at re‐start
+#  PMTKnnn,<args>     Send the specified PMTK command
 #
 
 # Clear the EPO NVRAM
-PMTK127
+clear_epo
 # Factory reset
 factory_reset
 # Now set to 115200
