@@ -15,6 +15,7 @@ import tty
 import serial
 
 global debug
+global enabled_messages
 
 PREAMBLE = 0x2404
 EPO_CMD = 0x02d2
@@ -174,7 +175,12 @@ def set_speed(fg, current_rate, requested_rate, count, delay):
     return False
 
 def cleanup(fi, fg, device, port_baudrate, keep):
+    global enabled_messages
     if fg:
+        if enabled_messages is not None:
+            enabled_messages[0] = "PMTK314"
+            send_and_wait(fg, ','.join(enabled_messages), 2, r="PMTK001,314,3", retries=2)
+
         tty.setraw(fg, tty.TCSANOW)
 
     if fg and not keep:
@@ -253,6 +259,7 @@ def getBinaryResponse(fg, command):
 
 def main():
     global debug
+    global enabled_messages
 
     parser = argparse.ArgumentParser(fromfile_prefix_chars='@',
     description="Loads EPO data sets to MT3339 GPS",
@@ -328,6 +335,14 @@ def main():
 
     if fg is None:
         return 1
+
+    enabled_messages = send_and_wait(fg, "PMTK414", 2, r="PMTK514", retries=2)
+    if enabled_messages is None:
+        print("Unable to save enabled messages", file=sys.stderr)
+    else:
+        resp = send_and_wait(fg, "PMTK314,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0", 2, r="PMTK001,314,3", retries=2)
+        if resp is None:
+            print("Unable to temporarily suppress NMEA messages", file=sys.stderr)
 
     time.sleep(0.500)
     resp = send_and_wait(fg, "PMTK605", 2, r="PMTK705", retries=2)

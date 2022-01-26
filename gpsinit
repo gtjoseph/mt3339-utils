@@ -18,6 +18,8 @@ global output_device
 global keep_new_speed
 global speed
 global debug
+global enabled_messages
+global fg
 
 PREAMBLE = 0x2404
 EPO_CMD = 0x02d2
@@ -250,6 +252,7 @@ def process_command(fg, line, expected_response="PMTK"):
     if line[0] == '-':
         send_string(fg, line[1:])
         time.sleep(0.250)
+        return (0, None)
     else:
         resp = send_and_wait(fg, line, 5, r=expected_response)
         if resp is None:
@@ -257,12 +260,16 @@ def process_command(fg, line, expected_response="PMTK"):
             rc = 1
     return (rc, resp)
 
-def process_line(fg, line):
+def process_line(line):
     global output_device
     global keep_new_speed
     global speed
     global debug
+    global enabled_messages
+    global fg
+
     rc = 0
+    resp = None
     if line[0:len("setspeed ")] == "setspeed ":
         newspeed = int(line[len("setspeed "):].strip())
         print("Setting new speed: %d" % newspeed)
@@ -277,11 +284,11 @@ def process_line(fg, line):
         print("Sleeping for %f seconds" % sleeptime)
         time.sleep(sleeptime)
     elif line.count("get_version") >= 1:
-        rc, resp = process_command(fg, line.replace("get_version", "PMTK605"), expected_response="PMTK705")
+        (rc, resp) = process_command(fg, line.replace("get_version", "PMTK605"), expected_response="PMTK705")
         if rc == 0:
             print(resp, file=sys.stderr)
     elif line.count("get_epo") >= 1:
-        rc, resp = process_command(fg, line.replace("get_epo", "PMTK607"), expected_response="PMTK707")
+        (rc, resp) = process_command(fg, line.replace("get_epo", "PMTK607"), expected_response="PMTK707")
         if rc == 0:
             vstart = int(int(resp[2]) * 168 + int(resp[3]) / 3600)
             vend = int(int(resp[4]) * 168 + int(resp[5]) / 3600)
@@ -291,13 +298,22 @@ def process_line(fg, line):
     elif line.count("debug_off") >= 1:
         debug = False
     elif line.count("hot_start") >= 1:
-        rc = process_command(fg, line.replace("hot_start", "PMTK101"), expected_response="$PGACK")
+        (rc, resp) = process_command(fg, line.replace("hot_start", "PMTK101"), expected_response="$PGACK")
     elif line.count("warm_start") >= 1:
-        rc = process_command(fg, line.replace("warm_start", "PMTK102"), expected_response="$PGACK")
+        (rc, resp) = process_command(fg, line.replace("warm_start", "PMTK102"), expected_response="$PGACK")
     elif line.count("cold_start") >= 1:
-        rc = process_command(fg, line.replace("cold_start", "PMTK103"), expected_response="$PGACK")
+        (rc, resp) = process_command(fg, line.replace("cold_start", "PMTK103"), expected_response="$PGACK")
     elif line.count("clear_epo") >= 1:
-        rc = process_command(fg, "PMTK127", expected_response="$CLR,EPO")
+        (rc, resp) = process_command(fg, "PMTK127", expected_response="$CLR,EPO")
+    elif line.count("save_enabled_messages") >= 1:
+        (rc, resp) = process_command(fg, "PMTK414", expected_response="PMTK514")
+        if rc == 0:
+            enabled_messages = resp
+    elif line.count("restore_enabled_messages") >= 1:
+        if enabled_messages is not None:
+            send_cmd = enabled_messages
+            send_cmd[0] = "PMTK314"
+            (rc, resp) = process_command(fg, ','.join(send_cmd), expected_response="PMTK001,314,3")
     elif line == "factory_reset":
         rc = process_command(fg, "-PMTK104")
         time.sleep(0.500)
@@ -316,7 +332,7 @@ def process_line(fg, line):
             pline = p.stdout.readline().decode("utf-8")
             if not pline:
                 break
-            print(">> " + pline.strip())
+            print(">>> " + pline.strip())
     elif line[0:len("epoloader ")] == "epoloader ":
         port_baudrate = fg.baudrate
         fg.close()
@@ -333,8 +349,10 @@ def process_line(fg, line):
         if fg is None:
             rc = 1
     else:
-        rc = process_command(fg, line)
-    return (rc, fg)
+        (rc, resp) = process_command(fg, line)
+        if resp is not None:
+            print(rc,resp)
+    return (rc, resp)
 
 
 def main():
@@ -342,6 +360,8 @@ def main():
     global keep_new_speed
     global speed
     global debug
+    global enabled_messages
+    global fg
 
     parser = argparse.ArgumentParser(fromfile_prefix_chars='@',
     description="Initialized GPS to known state",
@@ -387,6 +407,11 @@ def main():
 
     rc = 0
     fi = None
+    enabled_messages = None
+    (rc, resp) = process_command(fg, "PMTK414", expected_response="PMTK514")
+    if rc == 0:
+        enabled_messages = resp
+
     if args.command_file:
         fi = io.open(args.command_file, mode="r")
         print("Processing commands...")
@@ -400,17 +425,18 @@ def main():
             if line[0] == "#":
                 continue
             line = line.replace("${DEVICE}", output_device).replace("${SPEED}", str(speed))
-            print(line)
-            (rc, fg) = process_line(fg, line)
+            print(">> %s" % line)
+            (rc, resp) = process_line(line)
             if rc != 0:
+                print(rc);
                 break
 
         fi.close()
         print("Done")
     elif args.init_command:
-        (rc, fg) = process_line(fg, args.init_command)
+        (rc, resp) = process_line(args.init_command)
     else:
-        (rc, fg) = process_line(fg, DEFAULT_COMMAND)
+        (rc, resp) = process_line(DEFAULT_COMMAND)
 
     cleanup(fi, fg, args.output_device, port_baudrate, args.keep_new_speed)
 
