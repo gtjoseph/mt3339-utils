@@ -315,8 +315,9 @@ def process_line(line):
             send_cmd[0] = "PMTK314"
             (rc, resp) = process_command(fg, ','.join(send_cmd), expected_response="PMTK001,314,3")
     elif line == "factory_reset":
-        rc = process_command(fg, "-PMTK104")
+        (rc, _resp) = process_command(fg, "-PMTK104")
         time.sleep(0.500)
+        port_baudrate = fg.baudrate
         fg.close()
         fg = get_known_state(output_device, speed, port_baudrate, keep_new_speed)
         if fg is None:
