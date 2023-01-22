@@ -1,20 +1,15 @@
 #!/usr/bin/python -uO
 
-from __future__ import print_function
-from threading import Thread
 import argparse
 import io
 import os
 import struct
-import subprocess
 import sys
 import termios
 import time
 import tty
 import math
-
 import serial
-from pre_commit import xargs
 
 global debug
 global enabled_messages
