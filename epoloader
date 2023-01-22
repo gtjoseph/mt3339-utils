@@ -11,8 +11,10 @@ import sys
 import termios
 import time
 import tty
+import math
 
 import serial
+from pre_commit import xargs
 
 global debug
 global enabled_messages
@@ -257,84 +259,73 @@ def getBinaryResponse(fg, command):
             break
     return (-1, -1)
 
-def main():
-    global debug
+
+EPO_SET_SIZE = 2304
+SAT_SET_SIZE = 72
+FRAME_LENGTH = 227
+file_size = 0
+enabled_messages = None
+
+def get_input_file(args):
+    global file_size
+    global EPO_SET_SIZE
+    global SAT_SET_SIZE
+    global FRAME_LENGTH
+
+    try:
+        file_size = os.stat(args.input_file).st_size
+        fi = io.open(args.input_file, mode="rb")
+    except:
+        print(sys.exc_info()[1])
+        return None
+
+    header = fi.read(75)
+    fi.close()
+    if header[0:3] == header[60:63]:
+#        EPO_SET_SIZE = 1920
+#        SAT_SET_SIZE = 60
+#        FRAME_LENGTH = 191
+        print("NOT Opening EPO Type I file with %d sets" % (file_size / EPO_SET_SIZE))
+        sys.exit(1)
+    elif header[0:3] == header[72:75]:
+        EPO_SET_SIZE = 2304
+        SAT_SET_SIZE = 72
+        FRAME_LENGTH = 227
+        print("Opening EPO Type II file with %d sets" % (file_size / EPO_SET_SIZE))
+    else:
+        print("%s is not a valid EPO file." % args.input_file, file=sys.stderr)
+        return None
+
+    if file_size % EPO_SET_SIZE != 0:
+        print("The size of %s is not an even multiple of EPO_SET_SIZE(%d).  It may be corrupted." % (args.input_file, EPO_SET_SIZE), file=sys.stderr)
+        return None
+
+    fi = io.open(args.input_file, mode="rb", buffering=0)
+    return fi
+
+def setup_device(args, fi):
     global enabled_messages
-
-    parser = argparse.ArgumentParser(fromfile_prefix_chars='@',
-    description="Loads EPO data sets to MT3339 GPS",
-    epilog="You can use '@filename' to read arguments from a file.")
-    parser.convert_arg_line_to_args = convert_arg_line_to_args
-    group = parser.add_argument_group(title="optional known time and location parameters")
-    group.add_argument("-t", "--time", dest="time_string", help="Current UTC or UTC from host", metavar="yyyy,mm,dd,hh,mm,ss | - ")
-    group.add_argument("-l", "--location", dest="location_string", help="Current location specified in decimal degrees and meters", metavar="lat.dddddd,lon.dddddd,alt")
-
-    parser.add_argument("-s", "--speed", type=int, default=-1, dest="speed", help="Interface speed", choices=[4800, 9600, 19200, 38400, 57600, 115200])
-    parser.add_argument("-k", "--keep-new-speed", dest="keep_new_speed", default=False, action="store_true", help="Don't restore the old speed on exit")
-    parser.add_argument("-c", "--clear", dest="clear_epo", default=False, action="store_true", help="Clears the existing EPO data from the unit")
-    parser.add_argument("-n", "--no-init", dest="no_init", default=False, action="store_true", help="Skips the initialization")
-    parser.add_argument("-m", "--max-sets", type=int, default=26, dest="max_sets", help="Send only n sets")
-    parser.add_argument("-d", "--debug", default=False, dest="debug", action="store_true", help="Print debugging info")
-
-    parser.add_argument("input_file", metavar="<EPO_File>", help="EPO File or '-' to just set the known parameters")
-    parser.add_argument("output_device", metavar="<gps_device>", help="GPS serial device such as '/dev/ttyUSB0'")
-
-    args = parser.parse_args()
-    debug=args.debug
-
-    fi = None
-    if args.input_file != "-":
-        try:
-            file_size = os.stat(args.input_file).st_size
-            fi = io.open(args.input_file, mode="rb")
-        except:
-            print(sys.exc_info()[1])
-            return 1
-
-        header = fi.read(75)
-        fi.close()
-        if header[0:3] == header[60:63]:
-            EPO_SET_SIZE = 1920
-            SAT_SET_SIZE = 60
-            FRAME_LENGTH = 191
-            print("Opening EPO Type I file with %d sets" % (file_size / EPO_SET_SIZE))
-        elif header[0:3] == header[72:75]:
-            EPO_SET_SIZE = 2304
-            SAT_SET_SIZE = 72
-            FRAME_LENGTH = 227
-            print("Opening EPO Type II file with %d sets" % (file_size / EPO_SET_SIZE))
-        else:
-            print("%s is not a valid EPO file." % args.input_file, file=sys.stderr)
-            return 1
-
-        if file_size % EPO_SET_SIZE != 0:
-            print("The size of %s is not an even multiple of EPO_SET_SIZE(%d).  It may be corrupted." % (args.input_file, EPO_SET_SIZE), file=sys.stderr)
-            return 1
-
-        fi = io.open(args.input_file, mode="rb", buffering=0)
-
-
     try:
         tfg = os.open(args.output_device, os.O_RDWR)
         params = termios.tcgetattr(tfg);
-        port_baudrate = baudrate[params[5]];
+        args.port_baudrate = baudrate[params[5]];
         tty.setraw(tfg, tty.TCSANOW)
     except:
         print(sys.exc_info()[1])
-        return 1
+        return None
     finally:
         os.close(tfg)
 
     if args.speed < 0:
-        args.speed = port_baudrate
+        args.speed = args.port_baudrate
 
     if args.no_init:
         fg = serial.Serial(args.output_device, timeout=5, baudrate=args.speed)
     else:
-        fg = get_known_state(args.output_device, args.speed, port_baudrate, args.keep_new_speed)
+        fg = get_known_state(args.output_device, args.speed, args.port_baudrate, args.keep_new_speed)
 
     if fg is None:
-        return 1
+        return None
 
     enabled_messages = send_and_wait(fg, "PMTK414", 2, r="PMTK514", retries=2)
     if enabled_messages is None:
@@ -361,14 +352,14 @@ def main():
         resp = send_and_wait(fg, "PMTK740,%s" % time_string, 2, r="PMTK001,740,3", retries=2)
         if resp is None or resp[2] != '3':
             print("ERROR: Unable to set time.", resp, file=sys.stderr)
-            cleanup(fi, fg, args.output_device, port_baudrate, args.keep_new_speed)
-            return 1
+            cleanup(fi, fg, args.output_device, args.port_baudrate, args.keep_new_speed)
+            return None
         print("Time set")
         resp = send_and_wait(fg, "PMTK741,%s,%s" % (args.location_string, time_string), 2, r="PMTK001,741,3", retries=2)
         if resp is None or resp[2] != '3':
             print("ERROR: Unable to set location.", file=sys.stderr)
-            cleanup(fi, fg, args.output_device, port_baudrate, args.keep_new_speed)
-            return 1
+            cleanup(fi, fg, args.output_device, args.port_baudrate, args.keep_new_speed)
+            return None
         print("Location set")
 
     if args.clear_epo:
@@ -376,18 +367,60 @@ def main():
         resp = send_and_wait(fg, "PMTK127", 2, r="$CLR,EPO", retries=2)
         if resp is None or resp[1] != 'EPO':
             print("ERROR: Unable to clear existing EPO data.", file=sys.stderr)
-            cleanup(fi, fg, args.output_device, port_baudrate, args.keep_new_speed)
-            return 1
+            cleanup(fi, fg, args.output_device, args.port_baudrate, args.keep_new_speed)
+            return None
 
     if fi is None:
-        cleanup(fi, fg, args.output_device, port_baudrate, args.keep_new_speed)
-        return 0
+        cleanup(fi, fg, args.output_device, args.port_baudrate, args.keep_new_speed)
+        return None
 
     print("Setting binary mode, speed: %d" % args.speed)
     send_string(fg, "PMTK253,1,%d" % args.speed)
 
     time.sleep(0.500)
     tty.setraw(fg, tty.TCSANOW)
+
+    return fg
+
+def main():
+    global debug
+    global enabled_messages
+    global file_size
+    global EPO_SET_SIZE
+    global SAT_SET_SIZE
+    global FRAME_LENGTH
+
+    parser = argparse.ArgumentParser(fromfile_prefix_chars='@',
+    description="Loads EPO data sets to MT3339 GPS",
+    epilog="You can use '@filename' to read arguments from a file.")
+    parser.convert_arg_line_to_args = convert_arg_line_to_args
+    group = parser.add_argument_group(title="optional known time and location parameters")
+    group.add_argument("-t", "--time", dest="time_string", help="Current UTC or UTC from host", metavar="yyyy,mm,dd,hh,mm,ss | - ")
+    group.add_argument("-l", "--location", dest="location_string", help="Current location specified in decimal degrees and meters", metavar="lat.dddddd,lon.dddddd,alt")
+
+    parser.add_argument("-s", "--speed", type=int, default=-1, dest="speed", help="Interface speed", choices=[4800, 9600, 19200, 38400, 57600, 115200])
+    parser.add_argument("-k", "--keep-new-speed", dest="keep_new_speed", default=False, action="store_true", help="Don't restore the old speed on exit")
+    parser.add_argument("-c", "--clear", dest="clear_epo", default=False, action="store_true", help="Clears the existing EPO data from the unit")
+    parser.add_argument("-n", "--no-init", dest="no_init", default=False, action="store_true", help="Skips the initialization")
+    parser.add_argument("-m", "--max-sets", type=int, default=26, dest="max_sets", help="Send only n sets")
+    parser.add_argument("-d", "--debug", default=False, dest="debug", action="store_true", help="Print debugging info")
+
+    parser.add_argument("input_file", metavar="<EPO_File>", help="EPO File or '-' to just set the known parameters")
+    parser.add_argument("output_device", metavar="<gps_device>", help="GPS serial device such as '/dev/ttyUSB0'")
+
+    args = parser.parse_args()
+    debug=args.debug
+
+    fi = None
+    if args.input_file != "-":
+        fi = get_input_file(args)
+
+    if fi is None:
+        sys.exit(1)
+
+    fg = setup_device(args, fi)
+    if fg is None:
+        sys.exit(1)
 
     seq = 0;
     total_read = 0;
@@ -397,15 +430,11 @@ def main():
 
     print("Sending %d EPO sets of %d" % (args.max_sets, file_size / EPO_SET_SIZE))
     while total_read < file_size:
-        for lseq in range(11):
+        for lseq in range(16):
             buf = bytearray(b'\0' * FRAME_LENGTH)
             struct.pack_into("<HHHH", buf, 0, PREAMBLE, FRAME_LENGTH, EPO_CMD, seq)
             data_start = 8
-            if lseq == 10:
-                data_end = data_start + SAT_SET_SIZE * 2
-            else:
-                data_end = data_start + SAT_SET_SIZE * 3
-
+            data_end = data_start + SAT_SET_SIZE * 2
             red = fi.read(data_end - data_start)
             total_read += len(red)
             buf[data_start:data_end] = red
@@ -415,7 +444,9 @@ def main():
             if lseq == 0:
                 epo_sets += 1
                 set_start_time = int(struct.unpack("<I", red[0:3] + b'\0')[0])
-                print("Sending set %4d.  Valid from %s UTC" % (epo_sets, Convert2UTC(set_start_time)))
+                print("Sending set %4d.  Valid from %s UTC to %s UTC"
+                      % (epo_sets, Convert2UTC(set_start_time),
+                         Convert2UTC(set_start_time + 6)))
                 if seq == 0:
                     start = set_start_time
 
@@ -451,29 +482,39 @@ def main():
         if result != 1:
             print("Final Transfer failed", file=sys.stderr)
         else:
-            print("%4d sets sent.  Valid from %s to %s UTC" % (epo_sets,
-            Convert2UTC(start),
-            Convert2UTC(end + 6)))
+            print("================================================================================")
 
     set_nmea(fg, args.speed, quiet=True)
     time.sleep(1.00)
 
     resp = send_and_wait(fg, "PMTK607", 2, r="PMTK707", retries=1)
-    cleanup(fi, fg, args.output_device, port_baudrate, args.keep_new_speed)
+    cleanup(fi, fg, args.output_device, args.port_baudrate, args.keep_new_speed)
 
     if resp is None:
         print("ERROR: EPO in NVRAM couldn't be verified", file=sys.stderr)
         return 1
 
-    vstart = int(int(resp[2]) * 168 + int(resp[3]) / 3600)
-    vend = int(int(resp[4]) * 168 + int(resp[5]) / 3600)
-    if vstart == start and vend == end:
+    vstart = int(int(resp[2]) * 168 + (int(resp[3]) / 3600))
+    vend = int(int(resp[4]) * 168 + (int(resp[5]) / 3600))
+
+    nsets = math.floor(((int(resp[1])) * 1920) / 2304 / 2)
+
+    fileout=sys.stdout
+    rc = 0
+    if vstart != start or vend != end:
+        fileout=sys.stderr
+        rc = 1
+    print("%3d sets sent.     Valid from %s UTC to %s UTC"
+          % (epo_sets, Convert2UTC(start), Convert2UTC(end + 6)),
+          file=fileout)
+    print("    sets in NVRAM: Valid from %s UTC to %s UTC" %
+          (Convert2UTC(vstart), Convert2UTC(vend + 6)),
+          file=fileout)
+    if rc == 0:
         print("Verified EPO in NVRAM matches file")
-        return 0
     else:
         print("ERROR: EPO in NVRAM doesnt match file", file=sys.stderr)
-        print("  In NVRAM: %s to %s UTC" % (Convert2UTC(vstart), Convert2UTC(vend)), file=sys.stderr)
-        return 1
+    return rc
 
 if __name__ == "__main__":
 

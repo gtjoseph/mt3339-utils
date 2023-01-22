@@ -499,8 +499,8 @@ f['ZDA'] = ZDA
 
 def TK707(a):
     w = s['SAT']
-    vstart = (int(a[2]) * 168 + int(a[3]) / 3600)
-    vend = (int(a[4]) * 168 + int(a[5]) / 3600)
+    vstart = int(int(a[2]) * 168 + (int(a[3]) / 3600))
+    vend = int(int(a[4]) * 168 + (int(a[5]) / 3600))
     draw_string(w, 5, 10, "From: %s" % (Convert2UTC(vstart)))
     draw_string(w, 6, 10, "  To: %s" % (Convert2UTC(vend)))
 f['TK707'] = TK707

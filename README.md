@@ -24,8 +24,11 @@ The Adafruit Ultimate GPS is based on the GlobalTop PA6H GPS unit which is in tu
 MediaTek MT3339 chip.  GlobalTop provides the ephemeris data in the form of an
 EPO (Extended Prediction Orbit) file available from their FTP site (see eporetrieve, below).
 There are other sources for EPO data, including directly from MediaTek, but there are 2 formats,
-EPO and EPO-II. The MT3339 in this applications needs the original EPO format and can handle
-only 7 or 14 day files. That's what's on the GlobalTop site.
+EPO ( 1920 byte sets) and EPO-II ( 2304 byte sets). Currently there are only EPO-II files
+available for download so that's the only format this program now supports.  Unfortunately though,
+while the 3339 can use EPO-II files, it can't store as many sets since the sets are larger.
+Only 23 sets can be uploaded reliably which is only about 5.75 days so make sure you use the
+`-m` option to limit the sets to 23 and adjust your cron job accordingly.
 
 So now what?  Use the tools...
 
@@ -79,9 +82,8 @@ Set:  120.  GPS Wk: 2198  Hr:  66  Sec:  237600  2022-02-22 17:59:46 to 2022-02-
 
 ```
 The current EPO.DAT provides by MediaTek is a type II file covering 30 days.  Since each
-set covers 6 hours, the file will contain 120 sets.  However, the MT3999 can only keep
-26 sets of Type II data, or about 6.5 days worth, in it's NVRAM.  See below.
-
+set covers 6 hours, the file will contain 120 sets.  However, as noted above, the MT3999 can
+only keep 23 sets of Type II data, or about 5.75 days worth, in it's NVRAM.  See below.
 
 ### Load the EPO file to the GPS:
 
@@ -161,51 +163,48 @@ the unit's firmware.  If you get into a bad communications state, just try again
 try holding the EN signal low for a second, or remove the
 power and battery for a few seconds to reset back to factory state.
 
-Almost there... Since the MT3339 can only hold 26 EPO sets, the default maximum number
+Almost there... Since the MT3339 can only hold 23 EPO sets, the default maximum number
 of sets to send is 26.  You can change this with the `-m / --max-sets` option but
-attempting to send more than 26 will cause the validation to fail 
+attempting to send more than 23 will cause the validation to fail 
 
 NOW you're ready.  Assuming your location and time is in epoloader.conf, the EPO file is
 /tmp/EPO.DAT, your device is connected to /dev/ttyUSB1 and you want to use the default 115200 speed, then...
 ```
-$ ./epoloader -s 115200 -c -l 39.754598,-105.236353,1780 -t- /tmp/EPO.DAT /dev/ttyUSB1
+$ ./epoloader -s 115200 -m 23 -c -l 39.754598,-105.236353,1780 -t- /tmp/EPO.DAT /dev/ttyUSB1
 Opening EPO Type II file with 120 sets
 Setting NMEA at 115200 baud.
    Unit is currently in NMEA mode at 115200 baud.
 GPS and port are now synchronized at 115200
-Setting known values: 39.754598,-105.236353,1780  2022,01,24,14,23,04
-Time set
-Location set
+GPS Version:  ['PMTK705', 'AXN_2.31_3339_13101700', '5632', 'PA6H', '1.0']
 Clearing existing EPO data
 Setting binary mode, speed: 115200
-Sending 26 EPO sets of 120
-Sending set    1.  Valid from 2022-01-23 23:59:46 UTC
-Sending set    2.  Valid from 2022-01-24 05:59:46 UTC
-Sending set    3.  Valid from 2022-01-24 11:59:46 UTC
-Sending set    4.  Valid from 2022-01-24 17:59:46 UTC
-Sending set    5.  Valid from 2022-01-24 23:59:46 UTC
-Sending set    6.  Valid from 2022-01-25 05:59:46 UTC
-Sending set    7.  Valid from 2022-01-25 11:59:46 UTC
-Sending set    8.  Valid from 2022-01-25 17:59:46 UTC
-Sending set    9.  Valid from 2022-01-25 23:59:46 UTC
-Sending set   10.  Valid from 2022-01-26 05:59:46 UTC
-Sending set   11.  Valid from 2022-01-26 11:59:46 UTC
-Sending set   12.  Valid from 2022-01-26 17:59:46 UTC
-Sending set   13.  Valid from 2022-01-26 23:59:46 UTC
-Sending set   14.  Valid from 2022-01-27 05:59:46 UTC
-Sending set   15.  Valid from 2022-01-27 11:59:46 UTC
-Sending set   16.  Valid from 2022-01-27 17:59:46 UTC
-Sending set   17.  Valid from 2022-01-27 23:59:46 UTC
-Sending set   18.  Valid from 2022-01-28 05:59:46 UTC
-Sending set   19.  Valid from 2022-01-28 11:59:46 UTC
-Sending set   20.  Valid from 2022-01-28 17:59:46 UTC
-Sending set   21.  Valid from 2022-01-28 23:59:46 UTC
-Sending set   22.  Valid from 2022-01-29 05:59:46 UTC
-Sending set   23.  Valid from 2022-01-29 11:59:46 UTC
-Sending set   24.  Valid from 2022-01-29 17:59:46 UTC
-Sending set   25.  Valid from 2022-01-29 23:59:46 UTC
-Sending set   26.  Valid from 2022-01-30 05:59:46 UTC
-  26 sets sent.  Valid from 2022-01-23 23:59:46 to 2022-01-30 11:59:46 UTC
+Sending 23 EPO sets of 120
+Sending set    1.  Valid from 2023-01-20 23:59:46 UTC to 2023-01-21 05:59:46 UTC
+Sending set    2.  Valid from 2023-01-21 05:59:46 UTC to 2023-01-21 11:59:46 UTC
+Sending set    3.  Valid from 2023-01-21 11:59:46 UTC to 2023-01-21 17:59:46 UTC
+Sending set    4.  Valid from 2023-01-21 17:59:46 UTC to 2023-01-21 23:59:46 UTC
+Sending set    5.  Valid from 2023-01-21 23:59:46 UTC to 2023-01-22 05:59:46 UTC
+Sending set    6.  Valid from 2023-01-22 05:59:46 UTC to 2023-01-22 11:59:46 UTC
+Sending set    7.  Valid from 2023-01-22 11:59:46 UTC to 2023-01-22 17:59:46 UTC
+Sending set    8.  Valid from 2023-01-22 17:59:46 UTC to 2023-01-22 23:59:46 UTC
+Sending set    9.  Valid from 2023-01-22 23:59:46 UTC to 2023-01-23 05:59:46 UTC
+Sending set   10.  Valid from 2023-01-23 05:59:46 UTC to 2023-01-23 11:59:46 UTC
+Sending set   11.  Valid from 2023-01-23 11:59:46 UTC to 2023-01-23 17:59:46 UTC
+Sending set   12.  Valid from 2023-01-23 17:59:46 UTC to 2023-01-23 23:59:46 UTC
+Sending set   13.  Valid from 2023-01-23 23:59:46 UTC to 2023-01-24 05:59:46 UTC
+Sending set   14.  Valid from 2023-01-24 05:59:46 UTC to 2023-01-24 11:59:46 UTC
+Sending set   15.  Valid from 2023-01-24 11:59:46 UTC to 2023-01-24 17:59:46 UTC
+Sending set   16.  Valid from 2023-01-24 17:59:46 UTC to 2023-01-24 23:59:46 UTC
+Sending set   17.  Valid from 2023-01-24 23:59:46 UTC to 2023-01-25 05:59:46 UTC
+Sending set   18.  Valid from 2023-01-25 05:59:46 UTC to 2023-01-25 11:59:46 UTC
+Sending set   19.  Valid from 2023-01-25 11:59:46 UTC to 2023-01-25 17:59:46 UTC
+Sending set   20.  Valid from 2023-01-25 17:59:46 UTC to 2023-01-25 23:59:46 UTC
+Sending set   21.  Valid from 2023-01-25 23:59:46 UTC to 2023-01-26 05:59:46 UTC
+Sending set   22.  Valid from 2023-01-26 05:59:46 UTC to 2023-01-26 11:59:46 UTC
+Sending set   23.  Valid from 2023-01-26 11:59:46 UTC to 2023-01-26 17:59:46 UTC
+================================================================================
+ 23 sets sent.     Valid from 2023-01-20 23:59:46 UTC to 2023-01-26 17:59:46 UTC
+    sets in NVRAM: Valid from 2023-01-20 23:59:46 UTC to 2023-01-26 17:59:46 UTC
 Verified EPO in NVRAM matches file
 
 ```
